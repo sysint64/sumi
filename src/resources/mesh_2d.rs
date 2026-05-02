@@ -2,7 +2,7 @@ use glam::Vec2;
 use lyon::tessellation;
 use wgpu::util::DeviceExt;
 
-use crate::{graphics_context::GraphicsContext, memory::instances::InstanceId, svg};
+use crate::{graphics_context::GraphicsContext, memory::InstanceId, svg};
 
 #[derive(Clone, Copy, Default)]
 pub struct SvgMesh {

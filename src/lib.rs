@@ -1,8 +1,10 @@
 pub mod graphics_context;
+pub mod lazy_graphics_resource;
+pub mod math;
 pub mod memory;
+pub mod renderer;
 pub mod resources;
 pub mod svg;
-pub mod math;
 
 pub fn add(left: u64, right: u64) -> u64 {
     left + right
