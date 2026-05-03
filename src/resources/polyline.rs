@@ -151,18 +151,17 @@ impl PolylineResources {
         self.last_point = Some(point2);
     }
 
-    // TODO:
-    // pub fn add_rect(&mut self, rect: Rect) {
-    //     let p1 = Vec3::new(rect.x, rect.y, 0.);
-    //     let p2 = Vec3::new(rect.x + rect.width, rect.y, 0.);
-    //     let p3 = Vec3::new(rect.x + rect.width, rect.y + rect.height, 0.);
-    //     let p4 = Vec3::new(rect.x, rect.y + rect.height, 0.);
+    pub fn add_rect(&mut self, rect: lattice::Rect<f32>) {
+        let p1 = Vec3::new(rect.x, rect.y, 0.);
+        let p2 = Vec3::new(rect.x + rect.width, rect.y, 0.);
+        let p3 = Vec3::new(rect.x + rect.width, rect.y + rect.height, 0.);
+        let p4 = Vec3::new(rect.x, rect.y + rect.height, 0.);
 
-    //     self.add_line(p1, p2);
-    //     self.add_line(p2, p3);
-    //     self.add_line(p3, p4);
-    //     self.add_line(p4, p1);
-    // }
+        self.add_line(p1, p2);
+        self.add_line(p2, p3);
+        self.add_line(p3, p4);
+        self.add_line(p4, p1);
+    }
 
     pub fn add_point(&mut self, point: Vec3) {
         if let Some(last_point) = self.last_point {

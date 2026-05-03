@@ -346,30 +346,6 @@ dependencies = [
 
 [[package]]
 name = "cosmic-text"
-version = "0.18.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbe782a9e7520cc7de2232c957a47f99d3a35e855552677d07a557bc1a3b66ed"
-dependencies = [
- "bitflags",
- "fontdb",
- "harfrust",
- "linebender_resource_handle",
- "log",
- "rangemap",
- "rustc-hash 2.1.2",
- "self_cell",
- "skrifa",
- "smol_str",
- "swash",
- "sys-locale",
- "unicode-bidi",
- "unicode-linebreak",
- "unicode-script",
- "unicode-segmentation",
-]
-
-[[package]]
-name = "cosmic-text"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be17b688510d934ce13f48a2beba700e11583e281e0fda99c22bb256a14eda73"
@@ -390,6 +366,14 @@ dependencies = [
  "unicode-linebreak",
  "unicode-script",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "cosmic-text-kv"
+version = "0.1.0"
+dependencies = [
+ "cosmic-text",
+ "slotmap",
 ]
 
 [[package]]
@@ -732,10 +716,8 @@ dependencies = [
 [[package]]
 name = "glyphon"
 version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68dde9640ec6f986f59a265b4c0a5177f61e87e3ba71983b2195dab119cda0fa"
 dependencies = [
- "cosmic-text 0.18.2",
+ "cosmic-text",
  "etagere",
  "lru",
  "rustc-hash 2.1.2",
@@ -1025,6 +1007,13 @@ checksum = "7564e90fe3c0d5771e1f0bc95322b21baaeaa0d9213fa6a0b61c99f8b17b3bfb"
 dependencies = [
  "arrayvec",
  "euclid",
+ "smallvec",
+]
+
+[[package]]
+name = "lattice"
+version = "0.1.0"
+dependencies = [
  "smallvec",
 ]
 
@@ -2006,12 +1995,13 @@ dependencies = [
  "ash",
  "bytemuck",
  "core-graphics",
- "cosmic-text 0.19.0",
+ "cosmic-text-kv",
  "glam",
  "glyphon",
  "image",
  "jni",
  "jni_fn",
+ "lattice",
  "libc",
  "log",
  "lyon",
