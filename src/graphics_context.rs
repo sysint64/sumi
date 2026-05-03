@@ -1,7 +1,7 @@
 use glam::Vec2;
 
 pub struct GraphicsContext<'a, 'b> {
-    render_pass: *mut wgpu::RenderPass<'b>,
+    pub(crate) render_pass: *mut wgpu::RenderPass<'b>,
     pub device: &'a wgpu::Device,
     pub queue: &'a wgpu::Queue,
     pub surface_texture_format: wgpu::TextureFormat,

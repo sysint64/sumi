@@ -5,3 +5,4 @@ pub mod memory;
 pub mod renderer;
 pub mod resources;
 pub mod svg;
+pub mod view;
