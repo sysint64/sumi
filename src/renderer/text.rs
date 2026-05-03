@@ -98,7 +98,11 @@ impl TextRenderer {
         let glyphon_renderer = glyphon::TextRenderer::new(
             &mut atlas,
             context.device,
-            wgpu::MultisampleState::default(),
+            wgpu::MultisampleState {
+                count: context.sample_count,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
             None,
         );
 

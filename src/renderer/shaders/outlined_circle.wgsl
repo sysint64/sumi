@@ -41,22 +41,22 @@ fn vs_main(
     return out;
 }
 
+fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        return c / 12.92;
+    } else {
+        return pow((c + 0.055) / 1.055, 2.4);
+    }
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let size = vec2(in.radius);
     let R = 0.5;
-    let R2 = 0.5 - (in.width / size.x / 2.);
-
+    let R2 = 0.5 - (in.width / in.radius / 2.0);
     let dist = length(in.coord);
-    let RR = R - 0.005;
-    let RR2 = R2 + 0.005;
-    let sm = smoothstep(R, RR, dist);
-    let sm2 = smoothstep(R2, RR2, dist);
-    let alpha = sm*sm2;
-
-    if (dist < 0.5 && dist > R2) {
-        return vec4(in.color.rgb, in.color.a + alpha);
-    } else {
-        return vec4(0., 0., 0., 0.);
-    }
+    let aa = fwidth(dist);
+    let outer = smoothstep(R + aa, R - aa, dist);
+    let inner = smoothstep(R2 - aa, R2 + aa, dist);
+    let linear = vec3(srgb_to_linear(in.color.r), srgb_to_linear(in.color.g), srgb_to_linear(in.color.b));
+    return vec4(linear, in.color.a * outer * inner);
 }

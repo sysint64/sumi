@@ -102,7 +102,20 @@ struct FragmentOutput {
     @location(0) out_color: vec4<f32>,
 };
 
+fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        return c / 12.92;
+    } else {
+        return pow((c + 0.055) / 1.055, 2.4);
+    }
+}
+
 @fragment
 fn fs_main(@location(0) v_color: vec4<f32>) -> FragmentOutput {
-    return FragmentOutput(v_color);
+    return FragmentOutput(vec4(
+        srgb_to_linear(v_color.r),
+        srgb_to_linear(v_color.g),
+        srgb_to_linear(v_color.b),
+        v_color.a,
+    ));
 }

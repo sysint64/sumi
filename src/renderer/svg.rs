@@ -242,7 +242,7 @@ impl<I: Instances<Mesh2DInstanceId, SvgMeshInstance>> SvgRenderer<I> {
                 },
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState {
-                    count: 1,
+                    count: context.sample_count,
                     mask: !0,
                     alpha_to_coverage_enabled: false,
                 },

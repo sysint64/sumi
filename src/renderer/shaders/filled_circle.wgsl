@@ -35,18 +35,20 @@ fn vs_main(
     return out;
 }
 
+fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        return c / 12.92;
+    } else {
+        return pow((c + 0.055) / 1.055, 2.4);
+    }
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let R = 0.5;
-
     let dist = length(in.coord);
-    let RR = R - 0.002;
-    let sm = smoothstep(R, RR, dist);
-    let alpha = sm;
-
-    if (dist < R) {
-        return vec4(in.color.rgb, min(1.0, in.color.a + alpha));
-    } else {
-        return vec4(0., 0., 0., 0.);
-    }
+    let aa = fwidth(dist);
+    let alpha = smoothstep(R + aa, R - aa, dist);
+    let linear = vec3(srgb_to_linear(in.color.r), srgb_to_linear(in.color.g), srgb_to_linear(in.color.b));
+    return vec4(linear, in.color.a * alpha);
 }

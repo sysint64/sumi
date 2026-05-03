@@ -7,6 +7,7 @@ pub struct GraphicsContext<'a, 'b> {
     pub surface_texture_format: wgpu::TextureFormat,
     pub view_size: Vec2,
     pub scale_factor: f32,
+    pub sample_count: u32,
 }
 
 #[derive(PartialEq)]

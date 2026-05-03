@@ -154,7 +154,7 @@ impl<I: Instances<OutlinedCircleInstanceId, OutlinedCircleInstance>> OutlinedCir
                     }),
                     primitive: wgpu::PrimitiveState {
                         topology: wgpu::PrimitiveTopology::TriangleStrip,
-                        strip_index_format: None,
+                        strip_index_format: Some(wgpu::IndexFormat::Uint16),
                         front_face: wgpu::FrontFace::Cw,
                         cull_mode: Some(wgpu::Face::Back),
                         polygon_mode: wgpu::PolygonMode::Fill,
@@ -163,7 +163,7 @@ impl<I: Instances<OutlinedCircleInstanceId, OutlinedCircleInstance>> OutlinedCir
                     },
                     depth_stencil: None,
                     multisample: wgpu::MultisampleState {
-                        count: 1,
+                        count: context.sample_count,
                         mask: !0,
                         alpha_to_coverage_enabled: false,
                     },

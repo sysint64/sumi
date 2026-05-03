@@ -38,3 +38,11 @@ libc = "0.2.186"
 objc = "0.2.7"
 core-graphics = "0.25.0"
 objc-foundation = "0.1.1"
+
+[dev-dependencies]
+winit = "0.30"
+sumi = { path = "." }
+pollster = "0.4"
+parking_lot = "0.12"
+anyhow = "*"
+rand = "0.10"

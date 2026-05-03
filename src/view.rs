@@ -43,6 +43,8 @@ struct RenderStats {
     rendered_frames: u32,
 }
 
+const MSAA_SAMPLES: u32 = 4;
+
 pub struct Graphics {
     pub id: u64,
 
@@ -51,6 +53,7 @@ pub struct Graphics {
     view: GraphicsView,
     stats: RenderStats,
     surface_texture_format: wgpu::TextureFormat,
+    msaa_texture_view: wgpu::TextureView,
 
     pub(crate) surface: wgpu::Surface<'static>,
     pub(crate) device: wgpu::Device,
@@ -78,6 +81,29 @@ pub struct GraphicsCreateParams {
 }
 
 impl Graphics {
+    fn create_msaa_view(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+    ) -> wgpu::TextureView {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("MSAA Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: MSAA_SAMPLES,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        texture.create_view(&wgpu::TextureViewDescriptor::default())
+    }
+
     /// # Safety
     ///
     /// Should be called once when app is initialized.
@@ -107,7 +133,7 @@ impl Graphics {
             format: surface_texture_format,
             width: params.view_size.x as u32,
             height: params.view_size.y as u32,
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode: wgpu::PresentMode::AutoNoVsync,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             desired_maximum_frame_latency: 2,
             view_formats: vec![],
@@ -115,8 +141,16 @@ impl Graphics {
 
         params.surface.configure(&params.device, &config);
 
+        let msaa_texture_view = Self::create_msaa_view(
+            &params.device,
+            surface_texture_format,
+            params.view_size.x as u32,
+            params.view_size.y as u32,
+        );
+
         let gapi = Self {
             surface_texture_format,
+            msaa_texture_view,
             suspend: false,
             wake: false,
 
@@ -203,9 +237,10 @@ impl Graphics {
                 required_limits: adapter.limits(),
                 memory_hints: wgpu::MemoryHints::Performance,
                 trace: wgpu::Trace::Off,
-                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                experimental_features: unsafe { wgpu::ExperimentalFeatures::enabled() },
             })
             .await;
+
         match res {
             Err(err) => {
                 panic!("request_device failed: {err:?}");
@@ -227,6 +262,12 @@ impl Graphics {
             self.config.width = new_size.x as u32;
             self.config.height = new_size.y as u32;
             self.surface.configure(&self.device, &self.config);
+            self.msaa_texture_view = Self::create_msaa_view(
+                &self.device,
+                self.surface_texture_format,
+                new_size.x as u32,
+                new_size.y as u32,
+            );
             self.queue.submit([]);
             self.wake = true;
 
@@ -265,6 +306,7 @@ impl Graphics {
                 queue: &self.queue,
                 view_size: self.view.size,
                 scale_factor: self.view.scale_factor,
+                sample_count: MSAA_SAMPLES,
             };
 
             gapi_state
@@ -326,7 +368,7 @@ impl Graphics {
             }
         };
 
-        let view = output
+        let surface_view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -340,8 +382,8 @@ impl Graphics {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
+                    view: &self.msaa_texture_view,
+                    resolve_target: Some(&surface_view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: 0.1,
@@ -349,7 +391,7 @@ impl Graphics {
                             b: 0.3,
                             a: 1.0,
                         }),
-                        store: wgpu::StoreOp::Store,
+                        store: wgpu::StoreOp::Discard,
                     },
                     depth_slice: None,
                 })],
@@ -367,6 +409,7 @@ impl Graphics {
                     queue: &self.queue,
                     view_size: self.view.size,
                     scale_factor: self.view.scale_factor,
+                    sample_count: MSAA_SAMPLES,
                 };
 
                 renderer.render(&mut context, &self.view.clone());
