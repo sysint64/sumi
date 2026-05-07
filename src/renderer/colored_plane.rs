@@ -87,9 +87,13 @@ pub struct ColoredPlaneRenderer<
 
 impl<I: Instances<ColoredPlaneInstanceId, ColoredPlaneInstance>> ColoredPlaneRenderer<I> {
     pub fn new(context: &GraphicsContext<'_, '_>, mut instances: I) -> Self {
-        instances.create_buffer(context, |index, _| ColoredPlaneInstanceId {
-            value: index as u32,
-        });
+        instances.create_buffer(
+            context,
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            |index, _| ColoredPlaneInstanceId {
+                value: index as u32,
+            },
+        );
 
         let shader = context
             .device

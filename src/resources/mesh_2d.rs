@@ -11,7 +11,7 @@ pub struct SvgMesh {
     pub size: Vec2,
 }
 
-#[derive(Copy, Clone, Default, Debug)]
+#[derive(Copy, Clone, Default, Debug, PartialEq)]
 pub struct Mesh2DId {
     pub value: usize,
 }
@@ -93,6 +93,12 @@ impl Mesh2DSize {
             height,
             _pad: [0; 2],
         }
+    }
+}
+
+impl Default for Mesh2DSize {
+    fn default() -> Self {
+        Self { width: 0.0, height: 0.0, _pad: [0; 2] }
     }
 }
 

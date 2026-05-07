@@ -1,72 +1,73 @@
+pub(crate) use std::mem;
+
 use glam::{Mat4, Vec4};
 
 use crate::graphics_context::GraphicsContext;
-use crate::memory::{BumpInstances, InstanceId, Instances};
+use crate::instances::{PoolInstances, RenderInstances};
+use crate::memory_new::SlotId;
 use crate::resources::instancing_geometry::InstancingGeometry;
 use crate::resources::vertex::TexturedVertex;
 
-#[derive(Default, Debug, Copy, Clone)]
-pub struct FilledCircleInstanceId {
+#[derive(Default, Copy, Clone, PartialEq)]
+pub struct ColoredPlaneInstanceId {
     value: u32,
 }
 
-impl InstanceId for FilledCircleInstanceId {
+impl SlotId for ColoredPlaneInstanceId {
+    fn from_index(index: usize) -> Self {
+        ColoredPlaneInstanceId {
+            value: index as u32,
+        }
+    }
+
     fn index(&self) -> usize {
         self.value as usize
     }
 }
 
-impl PartialEq for FilledCircleInstanceId {
-    fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
-    }
-}
-
 #[repr(C)]
 #[derive(Default, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct FilledCircleInstance {
-    pub color: [f32; 4],
-    pub mvp_matrix: [[f32; 4]; 4],
+pub struct ColoredPlaneInstance {
+    mvp_matrix: [[f32; 4]; 4],
+    color: [f32; 4],
 }
 
-impl FilledCircleInstance {
+impl ColoredPlaneInstance {
     pub fn new(mvp_matrix: &Mat4, color: &Vec4) -> Self {
-        FilledCircleInstance {
+        ColoredPlaneInstance {
             mvp_matrix: mvp_matrix.to_cols_array_2d(),
             color: color.to_array(),
         }
     }
 
     pub fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
-        use std::mem;
-        let size_of = mem::size_of::<FilledCircleInstance>();
         wgpu::VertexBufferLayout {
-            array_stride: size_of as wgpu::BufferAddress,
+            array_stride: mem::size_of::<ColoredPlaneInstance>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &[
                 wgpu::VertexAttribute {
                     offset: 0,
-                    shader_location: 5,
+                    shader_location: 3,
                     format: wgpu::VertexFormat::Float32x4,
                 },
                 wgpu::VertexAttribute {
                     offset: mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
-                    shader_location: 6,
+                    shader_location: 4,
                     format: wgpu::VertexFormat::Float32x4,
                 },
                 wgpu::VertexAttribute {
                     offset: mem::size_of::<[f32; 8]>() as wgpu::BufferAddress,
-                    shader_location: 7,
+                    shader_location: 5,
                     format: wgpu::VertexFormat::Float32x4,
                 },
                 wgpu::VertexAttribute {
                     offset: mem::size_of::<[f32; 12]>() as wgpu::BufferAddress,
-                    shader_location: 8,
+                    shader_location: 6,
                     format: wgpu::VertexFormat::Float32x4,
                 },
                 wgpu::VertexAttribute {
                     offset: mem::size_of::<[f32; 16]>() as wgpu::BufferAddress,
-                    shader_location: 9,
+                    shader_location: 7,
                     format: wgpu::VertexFormat::Float32x4,
                 },
             ],
@@ -74,38 +75,27 @@ impl FilledCircleInstance {
     }
 }
 
-pub struct FilledCircleRenderer<
-    I: Instances<FilledCircleInstanceId, FilledCircleInstance> = BumpInstances<
-        FilledCircleInstanceId,
-        FilledCircleInstance,
-    >,
+pub struct ColoredPlaneRenderer<
+    I: RenderInstances = PoolInstances<ColoredPlaneInstanceId, ColoredPlaneInstance>,
 > {
     render_pipeline: wgpu::RenderPipeline,
     instances: I,
 }
 
-impl<I: Instances<FilledCircleInstanceId, FilledCircleInstance>> FilledCircleRenderer<I> {
-    pub fn new(context: &GraphicsContext<'_, '_>, mut instances: I) -> Self {
-        instances.create_buffer(
-            context,
-            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            |index, _| FilledCircleInstanceId {
-                value: index as u32,
-            },
-        );
-
+impl<I: RenderInstances> ColoredPlaneRenderer<I> {
+    pub fn new(context: &GraphicsContext<'_, '_>, instances: I) -> Self {
         let shader = context
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("Filled Circle Shader"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("shaders/filled_circle.wgsl").into()),
+                label: Some("Color Shader"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("shaders/colored_plane.wgsl").into()),
             });
 
         let render_pipeline_layout =
             context
                 .device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("Filled Circles Render Pipeline Layout"),
+                    label: Some("Render Pipeline Layout"),
                     bind_group_layouts: &[],
                     immediate_size: 0,
                 });
@@ -114,13 +104,13 @@ impl<I: Instances<FilledCircleInstanceId, FilledCircleInstance>> FilledCircleRen
             context
                 .device
                 .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some("Filled Circles Render Pipeline"),
+                    label: Some("Render Pipeline"),
                     layout: Some(&render_pipeline_layout),
                     cache: None,
                     vertex: wgpu::VertexState {
                         module: &shader,
                         entry_point: Some("vs_main"),
-                        buffers: &[TexturedVertex::desc(), FilledCircleInstance::desc()],
+                        buffers: &[TexturedVertex::desc(), ColoredPlaneInstance::desc()],
                         compilation_options: wgpu::PipelineCompilationOptions::default(),
                     },
                     fragment: Some(wgpu::FragmentState {
@@ -168,35 +158,21 @@ impl<I: Instances<FilledCircleInstanceId, FilledCircleInstance>> FilledCircleRen
         &mut self.instances
     }
 
-    pub fn render_all_instances<T>(&mut self, context: &mut GraphicsContext<'_, '_>, geometry: &T)
+    pub fn upload_all(&mut self, context: &GraphicsContext<'_, '_>) {
+        self.instances.upload_all(context);
+    }
+
+    pub fn render_all<T>(&mut self, context: &mut GraphicsContext<'_, '_>, geometry: &T)
     where
         T: InstancingGeometry,
     {
-        for range in self.instances.ranges_iter() {
-            context.render_pass().set_pipeline(&self.render_pipeline);
-            context
-                .render_pass()
-                .set_vertex_buffer(1, self.instances.gpu_buffer().slice(..));
-
-            geometry.render_instances(context, range);
-        }
-    }
-
-    pub fn render_instance<T>(
-        &mut self,
-        context: &mut GraphicsContext<'_, '_>,
-        geometry: &T,
-        id: FilledCircleInstanceId,
-    ) where
-        T: InstancingGeometry,
-    {
-        debug_assert!(self.instances.contains(id), "Invalid ID");
-
+        let ranges = self.instances.ranges(context);
         context.render_pass().set_pipeline(&self.render_pipeline);
         context
             .render_pass()
             .set_vertex_buffer(1, self.instances.gpu_buffer().slice(..));
-
-        geometry.render_instances(context, id.value..id.value + 1);
+        for range in ranges {
+            geometry.render_instances(context, range);
+        }
     }
 }

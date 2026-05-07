@@ -91,7 +91,7 @@ pub fn create_ortho_camera_matrices(transforms: &OthroCameraTransforms) -> Camer
 /// # Example
 ///
 /// ```
-/// use tech_paws_graphics::math::{create_centered_ortho_camera_matrices, OthroCameraTransforms};
+/// use sumi::math::{create_centered_ortho_camera_matrices, OthroCameraTransforms};
 /// use glam::Vec2;
 ///
 /// let transforms = OthroCameraTransforms {

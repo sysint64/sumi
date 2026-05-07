@@ -82,12 +82,16 @@ impl<I: Instances<Mesh2DInstanceId, ColoredSvgMeshInstance>> ColoredSvgRenderer<
         mesh_2d_resources: &Mesh2DResources,
         mut instances: I,
     ) -> Self {
-        instances.create_buffer(context, |index, instance| Mesh2DInstanceId {
-            mesh_id: Mesh2DId {
-                value: instance.mesh_id as usize,
+        instances.create_buffer(
+            context,
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            |index, instance| Mesh2DInstanceId {
+                mesh_id: Mesh2DId {
+                    value: instance.mesh_id as usize,
+                },
+                value: index as u32,
             },
-            value: index as u32,
-        });
+        );
 
         let shader = context
             .device

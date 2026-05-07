@@ -83,26 +83,28 @@ impl<ID: SlotId> Iterator for RangesIter<ID> {
     }
 }
 
-struct GpuVec<T> {
+pub struct GpuVec<T> {
     data: Vec<T>,
     gpu_buffer: Option<wgpu::Buffer>,
     gpu_capacity: usize,
     buffer_resized: bool,
+    dirty: bool,
     usage: wgpu::BufferUsages,
 }
 
 impl<T: Default + Clone + bytemuck::Pod + bytemuck::Zeroable> GpuVec<T> {
-    fn new(capacity: usize, usage: wgpu::BufferUsages) -> Self {
+    pub fn new(capacity: usize, usage: wgpu::BufferUsages) -> Self {
         Self {
             data: vec![T::default(); capacity],
             gpu_buffer: None,
             gpu_capacity: 0,
             buffer_resized: false,
+            dirty: false,
             usage,
         }
     }
 
-    fn ensure_created(&mut self, context: &GraphicsContext<'_, '_>) {
+    pub fn ensure_created(&mut self, context: &GraphicsContext<'_, '_>) {
         if self.gpu_buffer.is_some() {
             return;
         }
@@ -119,7 +121,7 @@ impl<T: Default + Clone + bytemuck::Pod + bytemuck::Zeroable> GpuVec<T> {
         self.gpu_capacity = self.data.len();
     }
 
-    fn recreate(&mut self, context: &GraphicsContext<'_, '_>) {
+    pub fn recreate(&mut self, context: &GraphicsContext<'_, '_>) {
         let gpu_buffer = context
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -133,7 +135,7 @@ impl<T: Default + Clone + bytemuck::Pod + bytemuck::Zeroable> GpuVec<T> {
         self.buffer_resized = true;
     }
 
-    fn upload_all(&mut self, context: &GraphicsContext<'_, '_>, active_len: usize) {
+    pub fn upload_all(&mut self, context: &GraphicsContext<'_, '_>, active_len: usize) {
         self.ensure_created(context);
 
         if active_len > self.gpu_capacity {
@@ -147,7 +149,7 @@ impl<T: Default + Clone + bytemuck::Pod + bytemuck::Zeroable> GpuVec<T> {
         );
     }
 
-    fn upload_slot(&mut self, context: &GraphicsContext<'_, '_>, slot: usize, active_len: usize) {
+    pub fn upload_slot(&mut self, context: &GraphicsContext<'_, '_>, slot: usize, active_len: usize) {
         self.ensure_created(context);
 
         if active_len > self.gpu_capacity {
@@ -170,21 +172,59 @@ impl<T: Default + Clone + bytemuck::Pod + bytemuck::Zeroable> GpuVec<T> {
         );
     }
 
-    fn gpu_buffer(&self) -> &wgpu::Buffer {
+    pub fn gpu_buffer(&self) -> &wgpu::Buffer {
         self.gpu_buffer
             .as_ref()
             .expect("Buffer has not been created")
     }
 
-    fn data(&self, active_len: usize) -> &[T] {
+    pub fn data(&self, active_len: usize) -> &[T] {
         &self.data[0..active_len]
     }
 
-    fn take_buffer_resized(&mut self) -> bool {
+    pub fn take_buffer_resized(&mut self) -> bool {
         let was = self.buffer_resized;
         self.buffer_resized = false;
 
         was
+    }
+
+    /// Ensures the GPU buffer exists and has enough capacity.
+    /// Does NOT upload data — call before recording draw commands.
+    pub fn ensure_capacity(&mut self, context: &GraphicsContext<'_, '_>, active_len: usize) {
+        if self.gpu_buffer.is_none() {
+            self.gpu_buffer = Some(context.device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: (self.data.len() * std::mem::size_of::<T>()) as wgpu::BufferAddress,
+                usage: self.usage,
+                mapped_at_creation: false,
+            }));
+            self.gpu_capacity = self.data.len();
+            self.buffer_resized = true;
+        } else if active_len > self.gpu_capacity {
+            self.gpu_buffer = Some(context.device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: (self.data.len() * std::mem::size_of::<T>()) as wgpu::BufferAddress,
+                usage: self.usage,
+                mapped_at_creation: false,
+            }));
+            self.gpu_capacity = self.data.len();
+            self.buffer_resized = true;
+        }
+    }
+
+    /// Uploads dirty data to the GPU. Does NOT resize — call ensure_capacity first.
+    pub fn flush(&mut self, context: &GraphicsContext<'_, '_>, active_len: usize) {
+        if !self.dirty {
+            return;
+        }
+        let Some(buffer) = &self.gpu_buffer else { return };
+        context.queue.write_buffer(
+            buffer,
+            0,
+            bytemuck::cast_slice(&self.data[0..active_len]),
+        );
+        self.dirty = false;
     }
 }
 
@@ -225,6 +265,7 @@ where
 
         let id = ID::from_index(index);
         self.gpu.data[index] = data;
+        self.gpu.dirty = true;
         self.ids.push(id);
 
         id
@@ -233,11 +274,20 @@ where
     pub fn update(&mut self, id: ID, data: T) {
         debug_assert!(self.ids.contains(&id), "Slot has not been allocated");
         self.gpu.data[id.index()] = data;
+        self.gpu.dirty = true;
     }
 
     pub fn clear(&mut self) {
         self.max_index = 0;
         self.ids.clear();
+    }
+
+    pub fn ensure_capacity(&mut self, context: &GraphicsContext<'_, '_>) {
+        self.gpu.ensure_capacity(context, self.max_index);
+    }
+
+    pub fn flush(&mut self, context: &GraphicsContext<'_, '_>) {
+        self.gpu.flush(context, self.max_index);
     }
 
     pub fn ranges_iter(&self) -> RangesIter<ID> {
@@ -298,10 +348,10 @@ where
 }
 
 pub struct PoolBuffer<ID, T> {
-    gpu: GpuVec<T>,
-    free_ids: Vec<ID>,
+    pub(crate) gpu: GpuVec<T>,
+    pub(crate) free_ids: Vec<ID>,
     ids: Vec<ID>,
-    max_index: usize,
+    pub(crate) max_index: usize,
 }
 
 impl<ID, T> PoolBuffer<ID, T>
@@ -342,6 +392,7 @@ where
 
         let id = ID::from_index(index);
         self.gpu.data[index] = data;
+        self.gpu.dirty = true;
         self.ids.push(id);
 
         id
@@ -361,12 +412,21 @@ where
     pub fn update(&mut self, id: ID, data: T) {
         debug_assert!(self.ids.contains(&id), "Slot has not been allocated");
         self.gpu.data[id.index()] = data;
+        self.gpu.dirty = true;
     }
 
     pub fn clear(&mut self) {
         self.max_index = 0;
         self.ids.clear();
         self.free_ids.clear();
+    }
+
+    pub fn ensure_capacity(&mut self, context: &GraphicsContext<'_, '_>) {
+        self.gpu.ensure_capacity(context, self.max_index);
+    }
+
+    pub fn flush(&mut self, context: &GraphicsContext<'_, '_>) {
+        self.gpu.flush(context, self.max_index);
     }
 
     pub fn ranges_iter(&self) -> RangesIter<ID> {

@@ -2,9 +2,12 @@ use std::mem;
 
 use glam::Mat4;
 
+use crate::SlotId;
 use crate::graphics_context::GraphicsContext;
-use crate::memory::{BumpInstances, Instances};
-use crate::resources::mesh_2d::{Mesh2DId, Mesh2DInstanceId, Mesh2DResources, Mesh2DVertex};
+use crate::memory_new::{BumpBuffer, GpuBuffer, SlottedBuffer};
+use crate::resources::mesh_2d::Mesh2DVertex;
+use crate::resources::mesh_2d_new::{Mesh2DId, Mesh2DInstanceId, Mesh2DResources};
+
 
 #[repr(C)]
 #[derive(Default, Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -57,7 +60,7 @@ impl SvgMeshInstance {
 }
 
 pub struct SvgRenderer<
-    I: Instances<Mesh2DInstanceId, SvgMeshInstance> = BumpInstances<
+    I: SlottedBuffer<Mesh2DInstanceId, SvgMeshInstance> = BumpBuffer<
         Mesh2DInstanceId,
         SvgMeshInstance,
     >,
@@ -69,23 +72,12 @@ pub struct SvgRenderer<
     instances: I,
 }
 
-impl<I: Instances<Mesh2DInstanceId, SvgMeshInstance>> SvgRenderer<I> {
+impl<I: SlottedBuffer<Mesh2DInstanceId, SvgMeshInstance>> SvgRenderer<I> {
     pub fn new(
         context: &GraphicsContext<'_, '_>,
         mesh_2d_resources: &Mesh2DResources,
-        mut instances: I,
+        instances: I,
     ) -> Self {
-        instances.create_buffer(
-            context,
-            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            |index, instance| Mesh2DInstanceId {
-                mesh_id: Mesh2DId {
-                    value: instance.mesh_id as usize,
-                },
-                value: index as u32,
-            },
-        );
-
         let shader = context
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -94,10 +86,9 @@ impl<I: Instances<Mesh2DInstanceId, SvgMeshInstance>> SvgRenderer<I> {
             });
 
         let (bind_group_layout, bind_group) =
-            SvgRenderer::<I>::create_bind_group(context.device, mesh_2d_resources);
+            Self::create_bind_group(context.device, mesh_2d_resources);
 
-        let render_pipeline =
-            SvgRenderer::<I>::create_pipeline(context, &shader, &bind_group_layout);
+        let render_pipeline = Self::create_pipeline(context, &shader, &bind_group_layout);
 
         Self {
             shader,
@@ -118,10 +109,10 @@ impl<I: Instances<Mesh2DInstanceId, SvgMeshInstance>> SvgRenderer<I> {
         mesh_2d_resources: &Mesh2DResources,
     ) {
         let (bind_group_layout, bind_group) =
-            SvgRenderer::<I>::create_bind_group(context.device, mesh_2d_resources);
+            Self::create_bind_group(context.device, mesh_2d_resources);
 
         self.render_pipeline =
-            SvgRenderer::<I>::create_pipeline(context, &self.shader, &bind_group_layout);
+            Self::create_pipeline(context, &self.shader, &bind_group_layout);
 
         self.bind_group_layout = bind_group_layout;
         self.bind_group = bind_group;
@@ -131,8 +122,6 @@ impl<I: Instances<Mesh2DInstanceId, SvgMeshInstance>> SvgRenderer<I> {
         device: &wgpu::Device,
         mesh_2d_resources: &Mesh2DResources,
     ) -> (wgpu::BindGroupLayout, wgpu::BindGroup) {
-        let storage = mesh_2d_resources.storage();
-
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("SVG Bind group layout"),
             entries: &[
@@ -142,7 +131,9 @@ impl<I: Instances<Mesh2DInstanceId, SvgMeshInstance>> SvgRenderer<I> {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(storage.primitive_buffer_byte_size),
+                        min_binding_size: wgpu::BufferSize::new(
+                            mesh_2d_resources.primitives_byte_size(),
+                        ),
                     },
                     count: None,
                 },
@@ -152,7 +143,9 @@ impl<I: Instances<Mesh2DInstanceId, SvgMeshInstance>> SvgRenderer<I> {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(storage.transform_buffer_byte_size),
+                        min_binding_size: wgpu::BufferSize::new(
+                            mesh_2d_resources.transforms_byte_size(),
+                        ),
                     },
                     count: None,
                 },
@@ -163,7 +156,7 @@ impl<I: Instances<Mesh2DInstanceId, SvgMeshInstance>> SvgRenderer<I> {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: wgpu::BufferSize::new(
-                            storage.mesh_sizes_buffer_byte_size,
+                            mesh_2d_resources.mesh_sizes_byte_size(),
                         ),
                     },
                     count: None,
@@ -178,19 +171,19 @@ impl<I: Instances<Mesh2DInstanceId, SvgMeshInstance>> SvgRenderer<I> {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Buffer(
-                        storage.primitives.as_entire_buffer_binding(),
+                        mesh_2d_resources.primitives_buffer().as_entire_buffer_binding(),
                     ),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::Buffer(
-                        storage.transforms.as_entire_buffer_binding(),
+                        mesh_2d_resources.transforms_buffer().as_entire_buffer_binding(),
                     ),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Buffer(
-                        storage.mesh_sizes.as_entire_buffer_binding(),
+                        mesh_2d_resources.mesh_sizes_buffer().as_entire_buffer_binding(),
                     ),
                 },
             ],
@@ -268,7 +261,11 @@ impl<I: Instances<Mesh2DInstanceId, SvgMeshInstance>> SvgRenderer<I> {
             .render_pass()
             .set_vertex_buffer(1, self.instances.gpu_buffer().slice(..));
 
-        mesh_2d_resources.render(context, instance_id);
+        let slot = instance_id.value;
+        let mesh_id = Mesh2DId {
+            value: self.instances.data()[instance_id.index()].mesh_id as usize,
+        };
+        mesh_2d_resources.render_slot(context, slot, mesh_id);
     }
 
     pub fn render_all_instances(
@@ -276,16 +273,20 @@ impl<I: Instances<Mesh2DInstanceId, SvgMeshInstance>> SvgRenderer<I> {
         context: &mut GraphicsContext<'_, '_>,
         mesh_2d_resources: &Mesh2DResources,
     ) {
-        for instance_id in self.instances.ids() {
-            context.render_pass().set_pipeline(&self.render_pipeline);
-            context
-                .render_pass()
-                .set_bind_group(0, &self.bind_group, &[]);
-            context
-                .render_pass()
-                .set_vertex_buffer(1, self.instances.gpu_buffer().slice(..));
+        context.render_pass().set_pipeline(&self.render_pipeline);
+        context
+            .render_pass()
+            .set_bind_group(0, &self.bind_group, &[]);
+        context
+            .render_pass()
+            .set_vertex_buffer(1, self.instances.gpu_buffer().slice(..));
 
-            mesh_2d_resources.render(context, *instance_id);
+        for &instance_id in self.instances.ids() {
+            let slot = instance_id.value;
+            let mesh_id = Mesh2DId {
+                value: self.instances.data()[instance_id.index()].mesh_id as usize,
+            };
+            mesh_2d_resources.render_slot(context, slot, mesh_id);
         }
     }
 }

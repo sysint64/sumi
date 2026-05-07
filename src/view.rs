@@ -31,7 +31,8 @@ pub struct GraphicsView {
     pub size: Vec2,
     pub delta_time: f64,
     pub delta_time_f32: f32,
-    pub scale_factor: f32,
+    pub scale_factor: f64,
+    pub scale_factor_f32: f32,
     pub fps: u32,
     pub safe_area: EdgeInsets,
     pub screen_camera_matrix: Mat4,
@@ -52,13 +53,13 @@ pub struct Graphics {
     wake: bool,
     view: GraphicsView,
     stats: RenderStats,
-    surface_texture_format: wgpu::TextureFormat,
-    msaa_texture_view: wgpu::TextureView,
+    pub surface_texture_format: wgpu::TextureFormat,
+    pub msaa_texture_view: wgpu::TextureView,
 
-    pub(crate) surface: wgpu::Surface<'static>,
-    pub(crate) device: wgpu::Device,
-    pub(crate) queue: wgpu::Queue,
-    pub(crate) config: wgpu::SurfaceConfiguration,
+    pub surface: wgpu::Surface<'static>,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+    pub config: wgpu::SurfaceConfiguration,
 }
 
 #[rustfmt::skip]
@@ -115,15 +116,7 @@ impl Graphics {
         }
     }
 
-    /// # Safety
-    ///
-    /// The [`Self::init_memory`] method should be called before calling this methd.
-    ///
-    /// - [`GAPI_STATE`] must be initialized and not concurrently accessed by other threads
-    /// - `params.id` should be unique to avoid overwriting existing entries
-    /// - Returned pointer is only valid while the entry remains in the global HashMap
-    /// - Caller must ensure proper lifetime management of the returned pointer
-    pub unsafe fn new(params: GraphicsCreateParams) -> *mut Graphics {
+    pub fn new(params: GraphicsCreateParams) -> Graphics {
         let caps = params.surface.get_capabilities(&params.adapter);
         let surface_texture_format = caps.formats[0];
         // let surface_texture_format = caps.formats[0].remove_srgb_suffix();
@@ -148,7 +141,7 @@ impl Graphics {
             params.view_size.y as u32,
         );
 
-        let gapi = Self {
+        Self {
             surface_texture_format,
             msaa_texture_view,
             suspend: false,
@@ -165,17 +158,30 @@ impl Graphics {
                 delta_timer: Instant::now(),
                 rendered_frames: 0,
             },
-        };
+        }
+    }
+
+    /// # Safety
+    ///
+    /// The [`Self::init_memory`] method should be called before calling this methd.
+    ///
+    /// - [`GAPI_STATE`] must be initialized and not concurrently accessed by other threads
+    /// - `params.id` should be unique to avoid overwriting existing entries
+    /// - Returned pointer is only valid while the entry remains in the global HashMap
+    /// - Caller must ensure proper lifetime management of the returned pointer
+    pub unsafe fn new_in_pool(params: GraphicsCreateParams) -> *mut Graphics {
+        let id = params.id;
+        let gapi = Self::new(params);
 
         let gapi_state = unsafe { GAPI_STATE.as_mut().unwrap() };
-        gapi_state.api.insert(params.id, gapi);
-        let gapi_ref = gapi_state.api.get_mut(&params.id).unwrap();
+        gapi_state.api.insert(id, gapi);
+        let gapi_ref = gapi_state.api.get_mut(&id).unwrap();
 
         gapi_ref as *mut Graphics
     }
 
     pub(crate) unsafe fn raw_new(params: GraphicsCreateParams) -> *mut u8 {
-        let gapi = unsafe { Self::new(params) };
+        let gapi = unsafe { Self::new_in_pool(params) };
 
         gapi as *mut u8
     }
@@ -249,9 +255,16 @@ impl Graphics {
         }
     }
 
-    pub fn set_view_parameters(&mut self, scale_factor: f32, new_size: Vec2) {
+    pub fn set_scale_factor(&mut self, scale_factor: f64) {
         self.view.scale_factor = scale_factor;
+        self.view.scale_factor_f32 = scale_factor as f32;
+    }
 
+    pub fn surface_configure(&self) {
+        self.surface.configure(&self.device, &self.config);
+    }
+
+    pub fn set_view_size(&mut self, new_size: Vec2) {
         if new_size == self.view.size_unscaled {
             return;
         }
@@ -291,6 +304,36 @@ impl Graphics {
         }
     }
 
+    pub fn render_pass<'a, 'b>(
+        &'a mut self,
+        render_pass: *mut wgpu::RenderPass<'b>,
+        sample_count: u32,
+    ) -> GraphicsContext<'a, 'b> {
+        GraphicsContext {
+            surface_texture_format: self.surface_texture_format,
+            render_pass,
+            device: &self.device,
+            queue: &self.queue,
+            view_size: self.view.size,
+            scale_factor: self.view.scale_factor as f32,
+            view: &self.view,
+            sample_count,
+        }
+    }
+
+    pub fn graphics_context(&mut self, sample_count: u32) -> GraphicsContext {
+        GraphicsContext {
+            surface_texture_format: self.surface_texture_format,
+            render_pass: ptr::null_mut(),
+            device: &self.device,
+            queue: &self.queue,
+            view_size: self.view.size,
+            scale_factor: self.view.scale_factor as f32,
+            view: &self.view,
+            sample_count,
+        }
+    }
+
     pub fn render(&mut self) {
         let gapi_state = unsafe { GAPI_STATE.as_mut().unwrap() };
         let renderer = gapi_state.renderers.get_mut(&self.id);
@@ -305,7 +348,8 @@ impl Graphics {
                 device: &self.device,
                 queue: &self.queue,
                 view_size: self.view.size,
-                scale_factor: self.view.scale_factor,
+                view: &self.view,
+                scale_factor: self.view.scale_factor as f32,
                 sample_count: MSAA_SAMPLES,
             };
 
@@ -408,7 +452,8 @@ impl Graphics {
                     device: &self.device,
                     queue: &self.queue,
                     view_size: self.view.size,
-                    scale_factor: self.view.scale_factor,
+                    view: &self.view,
+                    scale_factor: self.view.scale_factor as f32,
                     sample_count: MSAA_SAMPLES,
                 };
 

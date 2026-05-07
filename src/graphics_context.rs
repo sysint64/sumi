@@ -1,5 +1,7 @@
 use glam::Vec2;
 
+use crate::GraphicsView;
+
 pub struct GraphicsContext<'a, 'b> {
     pub(crate) render_pass: *mut wgpu::RenderPass<'b>,
     pub device: &'a wgpu::Device,
@@ -8,6 +10,7 @@ pub struct GraphicsContext<'a, 'b> {
     pub view_size: Vec2,
     pub scale_factor: f32,
     pub sample_count: u32,
+    pub view: &'a GraphicsView,
 }
 
 #[derive(PartialEq)]
