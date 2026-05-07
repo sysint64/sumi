@@ -141,6 +141,11 @@ impl<G: InstancingGeometry> ColoredPlaneRenderer<G> {
         }
     }
 
+    #[inline]
+    pub fn bind(&self, context: &mut GraphicsContext<'_, '_>) {
+        context.render_pass().set_pipeline(&self.render_pipeline);
+    }
+
     pub fn render_all<I>(
         &self,
         context: &mut GraphicsContext<'_, '_>,

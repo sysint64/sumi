@@ -10,7 +10,7 @@ pub trait SlotId: Sized {
     fn index(&self) -> usize;
 }
 
-pub trait GpuBuffer<T> {
+pub trait GpuBuffer<ID, T> {
     fn gpu_buffer(&self) -> &wgpu::Buffer;
 
     fn data(&self) -> &[T];
@@ -18,12 +18,12 @@ pub trait GpuBuffer<T> {
     fn flush(&mut self, context: &GraphicsContext<'_, '_>);
 
     fn take_buffer_resized(&mut self) -> bool;
-}
-
-pub trait SlottedBuffer<ID, T>: GpuBuffer<T> {
-    fn contains(&self, id: ID) -> bool;
 
     fn ids(&self) -> &[ID];
+}
+
+pub trait SlottedBuffer<ID, T>: GpuBuffer<ID, T> {
+    fn contains(&self, id: ID) -> bool;
 
     fn slot_data(&self, id: ID) -> &[T];
 }
@@ -238,11 +238,15 @@ where
     }
 }
 
-impl<ID, T> GpuBuffer<T> for BumpBuffer<ID, T>
+impl<ID, T> GpuBuffer<ID, T> for BumpBuffer<ID, T>
 where
     ID: SlotId + Copy + Clone + PartialEq,
     T: Default + Clone + bytemuck::Pod + bytemuck::Zeroable,
 {
+    fn ids(&self) -> &[ID] {
+        &self.ids
+    }
+
     fn gpu_buffer(&self) -> &wgpu::Buffer {
         self.gpu.gpu_buffer()
     }
@@ -267,10 +271,6 @@ where
 {
     fn contains(&self, id: ID) -> bool {
         self.ids.contains(&id)
-    }
-
-    fn ids(&self) -> &[ID] {
-        &self.ids
     }
 
     fn slot_data(&self, id: ID) -> &[T] {
@@ -373,11 +373,15 @@ where
     }
 }
 
-impl<ID, T> GpuBuffer<T> for PoolBuffer<ID, T>
+impl<ID, T> GpuBuffer<ID, T> for PoolBuffer<ID, T>
 where
     ID: SlotId + Copy + Clone + PartialEq,
     T: Default + Clone + bytemuck::Pod + bytemuck::Zeroable,
 {
+    fn ids(&self) -> &[ID] {
+        &self.ids
+    }
+
     fn gpu_buffer(&self) -> &wgpu::Buffer {
         self.gpu.gpu_buffer()
     }
@@ -402,10 +406,6 @@ where
 {
     fn contains(&self, id: ID) -> bool {
         self.ids.contains(&id)
-    }
-
-    fn ids(&self) -> &[ID] {
-        &self.ids
     }
 
     fn slot_data(&self, id: ID) -> &[T] {

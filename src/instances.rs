@@ -16,6 +16,8 @@ pub trait RenderInstances<ID, T> {
 
     fn upload_all(&mut self, context: &GraphicsContext);
 
+    fn data(&self) -> &[T];
+
     #[inline]
     fn bind(&mut self, slot: u32, context: &GraphicsContext) {
         context
@@ -198,6 +200,10 @@ where
     fn upload_all(&mut self, context: &GraphicsContext) {
         self.buffer.flush(context);
     }
+
+    fn data(&self) -> &[T] {
+        self.buffer.data()
+    }
 }
 
 pub struct PoolInstances<ID, T>
@@ -292,6 +298,10 @@ where
 
     fn upload_all(&mut self, context: &GraphicsContext) {
         self.buffer.flush(context);
+    }
+
+    fn data(&self) -> &[T] {
+        self.buffer.data()
     }
 }
 

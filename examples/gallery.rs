@@ -131,6 +131,7 @@ struct RenderDemoState {
     outlined_circle_mvp_matrix: Mat4,
     particles: Vec<Particle>,
     tiger: sumi::SvgMesh,
+    tiger_new: sumi::SvgMesh,
     goose: sumi::SvgMesh,
     tiger_mvp_matrix: Mat4,
     tiger2_mvp_matrix: Mat4,
@@ -161,6 +162,7 @@ struct RenderDemoRenderer<'a> {
 struct Resources<'a> {
     centered_plane: sumi::CenteredPlaneResources,
     mesh_2d: sumi::Mesh2DResources,
+    mesh_2d_new: sumi::resources::mesh_2d::Mesh2DResources,
 
     big_grid: sumi::PolylineResources,
     small_grid: sumi::PolylineResources,
@@ -176,6 +178,11 @@ struct Renderers {
     outlined_circle: sumi::OutlinedCircleRenderer,
     colored_svg: sumi::ColoredSvgRenderer,
     svg: sumi::SvgRenderer,
+    svg_new: sumi::renderer::svg::SvgRenderer,
+    svg_instances: sumi::instances::BumpInstances<
+        sumi::renderer::svg::SvgMeshInstanceId,
+        sumi::renderer::svg::SvgMeshInstance,
+    >,
     polyline: sumi::PolylineRenderer,
     text: sumi::TextRenderer,
     rounded_rect: sumi::RoundedRectRenderer,
@@ -187,6 +194,7 @@ impl RenderDemoRenderer<'_> {
         let mut resources = Resources {
             centered_plane: sumi::CenteredPlaneResources::new(context),
             mesh_2d: sumi::Mesh2DResources::new(),
+            mesh_2d_new: sumi::resources::mesh_2d::Mesh2DResources::new(),
             big_grid: sumi::PolylineResources::new(context),
             small_grid: sumi::PolylineResources::new(context),
             sin_wave: sumi::PolylineResources::new(context),
@@ -239,6 +247,10 @@ impl RenderDemoRenderer<'_> {
             .mesh_2d
             .load_svg_to_gpu(context, include_bytes!("assets/ghostscript_tiger.svg"));
 
+        state.tiger_new = resources
+            .mesh_2d_new
+            .load_svg_to_gpu(context, include_bytes!("assets/ghostscript_tiger.svg"));
+
         state.goose = resources
             .mesh_2d
             .load_svg_to_gpu(context, include_bytes!("assets/goose.svg"));
@@ -246,6 +258,7 @@ impl RenderDemoRenderer<'_> {
         let renderers = Renderers {
             colored_plane: sumi::ColoredPlaneRenderer::<sumi::CenteredPlaneResources>::new(context),
             colored_plane_instances: sumi::instances::BumpInstances::new(10),
+            svg_instances: sumi::instances::BumpInstances::new(10),
             filled_circle: sumi::FilledCircleRenderer::new(context, sumi::BumpInstances::new(10)),
             outlined_circle: sumi::OutlinedCircleRenderer::new(
                 context,
@@ -267,6 +280,7 @@ impl RenderDemoRenderer<'_> {
                     wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 ),
             ),
+            svg_new: sumi::renderer::svg::SvgRenderer::new(context, &resources.mesh_2d_new),
             polyline: sumi::PolylineRenderer::new(context),
             text: sumi::TextRenderer::new(context),
             rounded_rect: sumi::RoundedRectRenderer::new(context, sumi::BumpInstances::new(10)),
@@ -552,22 +566,22 @@ fn render_demo(
         .render_all_instances(context, &resources.centered_plane);
 
     // Svg
-    let svg_renderer = &mut renderers.svg;
+    let svg_renderer = &mut renderers.svg_new;
 
-    let instances = svg_renderer.instances();
+    let instances = &mut renderers.svg_instances;
     instances.clear();
 
-    instances.insert(sumi::SvgMeshInstance::new(
-        state.tiger.mesh_id,
+    instances.insert(sumi::renderer::svg::SvgMeshInstance::new(
+        state.tiger_new.mesh_id,
         &state.tiger_mvp_matrix,
     ));
-    instances.insert(sumi::SvgMeshInstance::new(
-        state.tiger.mesh_id,
+    instances.insert(sumi::renderer::svg::SvgMeshInstance::new(
+        state.tiger_new.mesh_id,
         &state.tiger2_mvp_matrix,
     ));
 
-    instances.flush(context);
-    svg_renderer.render_all_instances(context, &resources.mesh_2d);
+    instances.upload_all(context);
+    svg_renderer.render_all_instances(context, &resources.mesh_2d_new, instances);
 
     // Colored Svg
     let colored_svg_renderer = &mut renderers.colored_svg;
@@ -647,6 +661,10 @@ fn render_demo(
     renderers
         .text
         .render_all_instances(context, fonts, &resources.text);
+
+    if resources.mesh_2d_new.take_resized() {
+        renderers.svg_new.rebuild(context, &resources.mesh_2d_new);
+    }
 }
 
 pub fn render_grid(
