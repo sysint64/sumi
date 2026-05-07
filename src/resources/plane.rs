@@ -68,4 +68,16 @@ impl InstancingGeometry for PlaneResources {
             .render_pass()
             .draw_indexed(0..PLANE_INDICES.len() as u32, 0, instances);
     }
+
+    fn primitive() -> wgpu::PrimitiveState {
+        wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            strip_index_format: Some(wgpu::IndexFormat::Uint16),
+            front_face: wgpu::FrontFace::Cw,
+            cull_mode: Some(wgpu::Face::Back),
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        }
+    }
 }

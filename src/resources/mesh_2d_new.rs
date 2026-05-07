@@ -8,8 +8,8 @@ use crate::svg;
 
 // Re-use all shared types from mesh_2d unchanged.
 pub use crate::resources::mesh_2d::{
-    Mesh2DGpuData, Mesh2DGpuPrimitive, Mesh2DGpuTransform, Mesh2DId,
-    Mesh2DSize, Mesh2DVertex, SvgMesh,
+    Mesh2DGpuData, Mesh2DGpuPrimitive, Mesh2DGpuTransform, Mesh2DId, Mesh2DSize, Mesh2DVertex,
+    SvgMesh,
 };
 
 // Local instance ID — just an index into the instance buffer.
@@ -28,7 +28,9 @@ pub struct GPUTransformsBuck {
 
 impl Default for GPUTransformsBuck {
     fn default() -> Self {
-        Self { data: [Mesh2DGpuTransform::default(); 1024 * 8] }
+        Self {
+            data: [Mesh2DGpuTransform::default(); 1024 * 8],
+        }
     }
 }
 
@@ -40,7 +42,9 @@ pub struct GPUPrimitivesBuck {
 
 impl Default for GPUPrimitivesBuck {
     fn default() -> Self {
-        Self { data: [Mesh2DGpuPrimitive::default(); 1024] }
+        Self {
+            data: [Mesh2DGpuPrimitive::default(); 1024],
+        }
     }
 }
 
@@ -57,7 +61,9 @@ impl SlotId for Mesh2DId {
 
 impl SlotId for Mesh2DInstanceId {
     fn from_index(index: usize) -> Self {
-        Self { value: index as u32 }
+        Self {
+            value: index as u32,
+        }
     }
     fn index(&self) -> usize {
         self.value as usize
@@ -111,13 +117,11 @@ impl Mesh2DResources {
     }
 
     pub fn primitives_byte_size(&self) -> wgpu::BufferAddress {
-        (self.primitives_buf.data().len() * size_of::<GPUPrimitivesBuck>())
-            as wgpu::BufferAddress
+        (self.primitives_buf.data().len() * size_of::<GPUPrimitivesBuck>()) as wgpu::BufferAddress
     }
 
     pub fn transforms_byte_size(&self) -> wgpu::BufferAddress {
-        (self.transforms_buf.data().len() * size_of::<GPUTransformsBuck>())
-            as wgpu::BufferAddress
+        (self.transforms_buf.data().len() * size_of::<GPUTransformsBuck>()) as wgpu::BufferAddress
     }
 
     pub fn mesh_sizes_byte_size(&self) -> wgpu::BufferAddress {
@@ -213,9 +217,9 @@ impl Mesh2DResources {
         self.sizes_buf.insert(mesh.size);
 
         // Upload active data; handles GPU buffer creation and resize automatically.
-        self.primitives_buf.upload_all(context);
-        self.transforms_buf.upload_all(context);
-        self.sizes_buf.upload_all(context);
+        self.primitives_buf.flush(context);
+        self.transforms_buf.flush(context);
+        self.sizes_buf.flush(context);
 
         self.meshes.push(GpuMesh {
             vertex_buffer,
@@ -226,12 +230,7 @@ impl Mesh2DResources {
         mesh_id
     }
 
-    pub fn render_slot(
-        &self,
-        context: &mut GraphicsContext<'_, '_>,
-        slot: u32,
-        mesh_id: Mesh2DId,
-    ) {
+    pub fn render_slot(&self, context: &mut GraphicsContext<'_, '_>, slot: u32, mesh_id: Mesh2DId) {
         let mesh = self
             .meshes
             .get(mesh_id.value)

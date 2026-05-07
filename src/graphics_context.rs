@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use glam::Vec2;
 
 use crate::GraphicsView;
@@ -27,5 +29,24 @@ impl<'a, 'b> GraphicsContext<'a, 'b> {
         } else {
             unsafe { &mut *self.render_pass }
         }
+    }
+
+    #[inline]
+    pub fn default_depth_stencil(&self) -> Option<wgpu::DepthStencilState> {
+        None
+    }
+
+    #[inline]
+    pub fn default_multisample(&self) -> wgpu::MultisampleState {
+        wgpu::MultisampleState {
+            count: self.sample_count,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        }
+    }
+
+    #[inline]
+    pub fn default_multiview_mask(&self) -> Option<NonZeroU32> {
+        None
     }
 }

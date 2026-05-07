@@ -3,14 +3,25 @@ use std::ops::Range;
 use crate::graphics_context::GraphicsContext;
 use crate::memory_new::{BumpBuffer, GpuBuffer, PoolBuffer, SlotId};
 
-pub trait RenderInstances {
+pub trait RenderInstances<ID, T> {
     type Drain: Iterator<Item = Range<u32>>;
+
     type Ranges: Iterator<Item = Range<u32>>;
 
     fn gpu_buffer(&self) -> &wgpu::Buffer;
+
     fn drain(&mut self, context: &GraphicsContext) -> Self::Drain;
+
     fn ranges(&mut self, context: &GraphicsContext) -> Self::Ranges;
+
     fn upload_all(&mut self, context: &GraphicsContext);
+
+    #[inline]
+    fn bind(&mut self, slot: u32, context: &GraphicsContext) {
+        context
+            .render_pass()
+            .set_vertex_buffer(slot, self.gpu_buffer().slice(..));
+    }
 }
 
 pub struct BumpRangesIter {
@@ -138,17 +149,18 @@ where
         self.buffer.is_empty()
     }
 
-    pub(crate) fn ranges_iter(&self) -> BumpRangesIter {
+    fn ranges_iter(&self) -> BumpRangesIter {
         let len = self.buffer.len();
         BumpRangesIter {
             range: if len > 0 { Some(0..len as u32) } else { None },
         }
     }
 
-    pub(crate) fn drain_iter(&mut self) -> BumpRangesIter {
+    fn drain_iter(&mut self) -> BumpRangesIter {
         let start = self.drain_cursor;
         let end = self.buffer.len();
         self.drain_cursor = end;
+
         BumpRangesIter {
             range: if start < end {
                 Some(start as u32..end as u32)
@@ -159,7 +171,7 @@ where
     }
 }
 
-impl<ID, T> RenderInstances for BumpInstances<ID, T>
+impl<ID, T> RenderInstances<ID, T> for BumpInstances<ID, T>
 where
     ID: SlotId + Copy + Clone + PartialEq,
     T: Default + Clone + bytemuck::Pod + bytemuck::Zeroable,
@@ -170,26 +182,13 @@ where
     fn drain(&mut self, context: &GraphicsContext) -> BumpRangesIter {
         self.buffer.ensure_capacity(context);
 
-        let start = self.drain_cursor;
-        let end = self.buffer.len();
-        self.drain_cursor = end;
-
-        BumpRangesIter {
-            range: if start < end {
-                Some(start as u32..end as u32)
-            } else {
-                None
-            },
-        }
+        self.drain_iter()
     }
 
     fn ranges(&mut self, context: &GraphicsContext) -> BumpRangesIter {
         self.buffer.ensure_capacity(context);
-        let len = self.buffer.len();
 
-        BumpRangesIter {
-            range: if len > 0 { Some(0..len as u32) } else { None },
-        }
+        self.ranges_iter()
     }
 
     fn gpu_buffer(&self) -> &wgpu::Buffer {
@@ -200,8 +199,6 @@ where
         self.buffer.flush(context);
     }
 }
-
-// ---- PoolInstances ----
 
 pub struct PoolInstances<ID, T>
 where
@@ -230,6 +227,7 @@ where
     pub fn insert(&mut self, data: T) -> ID {
         let id = self.buffer.insert(data);
         self.pending.push(id);
+
         id
     }
 
@@ -250,7 +248,7 @@ where
         self.buffer.is_empty()
     }
 
-    pub(crate) fn ranges_iter(&self) -> PoolRangesIter<ID> {
+    fn ranges_iter(&self) -> PoolRangesIter<ID> {
         PoolRangesIter {
             free_ids: self.buffer.free_ids.clone(),
             free_cursor: 0,
@@ -259,42 +257,33 @@ where
         }
     }
 
-    pub(crate) fn drain_iter(&mut self) -> PoolDrainIter<ID> {
+    fn drain_iter(&mut self) -> PoolDrainIter<ID> {
         let mut ids = std::mem::take(&mut self.pending);
         ids.sort_unstable_by_key(|id| id.index());
+
         PoolDrainIter { ids, cursor: 0 }
     }
 }
 
-impl<ID, T> RenderInstances for PoolInstances<ID, T>
+impl<ID, T> RenderInstances<ID, T> for PoolInstances<ID, T>
 where
     ID: SlotId + Copy + Clone + PartialEq,
     T: Default + Clone + bytemuck::Pod + bytemuck::Zeroable,
 {
     type Drain = PoolDrainIter<ID>;
+
     type Ranges = PoolRangesIter<ID>;
 
-    /// Returns ranges for pending instances and marks them as submitted.
-    /// Zero new allocation — reuses the existing pending Vec.
     fn drain(&mut self, context: &GraphicsContext) -> PoolDrainIter<ID> {
         self.buffer.ensure_capacity(context);
 
-        let mut ids = std::mem::take(&mut self.pending);
-        ids.sort_unstable_by_key(|id| id.index());
-
-        PoolDrainIter { ids, cursor: 0 }
+        self.drain_iter()
     }
 
-    /// Returns all active ranges. One allocation to clone free_ids.
     fn ranges(&mut self, context: &GraphicsContext) -> PoolRangesIter<ID> {
         self.buffer.ensure_capacity(context);
 
-        PoolRangesIter {
-            free_ids: self.buffer.free_ids.clone(),
-            free_cursor: 0,
-            cursor: 0,
-            max_index: self.buffer.max_index,
-        }
+        self.ranges_iter()
     }
 
     fn gpu_buffer(&self) -> &wgpu::Buffer {
@@ -324,15 +313,15 @@ mod tests {
 
     // Helpers -------------------------------------------------------------------------------------
 
-    /// Collect drain iterator ranges for the given pending indices.
     fn drained(indices: &[usize]) -> Vec<Range<u32>> {
         let ids = indices.iter().map(|&i| TestId(i)).collect();
+
         PoolDrainIter { ids, cursor: 0 }.collect()
     }
 
-    /// Collect active ranges for a pool with `max_index` slots where `free` slots are free.
     fn active(max_index: usize, free: &[usize]) -> Vec<Range<u32>> {
         let free_ids = free.iter().map(|&i| TestId(i)).collect();
+
         PoolRangesIter {
             free_ids,
             free_cursor: 0,

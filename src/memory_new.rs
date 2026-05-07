@@ -15,14 +15,12 @@ pub trait GpuBuffer<T> {
 
     fn data(&self) -> &[T];
 
-    fn upload_all(&mut self, context: &GraphicsContext<'_, '_>);
+    fn flush(&mut self, context: &GraphicsContext<'_, '_>);
 
     fn take_buffer_resized(&mut self) -> bool;
 }
 
 pub trait SlottedBuffer<ID, T>: GpuBuffer<T> {
-    fn upload_slot(&mut self, context: &GraphicsContext<'_, '_>, id: ID);
-
     fn contains(&self, id: ID) -> bool;
 
     fn ids(&self) -> &[ID];
@@ -104,74 +102,6 @@ impl<T: Default + Clone + bytemuck::Pod + bytemuck::Zeroable> GpuVec<T> {
         }
     }
 
-    pub fn ensure_created(&mut self, context: &GraphicsContext<'_, '_>) {
-        if self.gpu_buffer.is_some() {
-            return;
-        }
-
-        let gpu_buffer = context
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents: bytemuck::cast_slice(&self.data),
-                usage: self.usage,
-            });
-
-        self.gpu_buffer = Some(gpu_buffer);
-        self.gpu_capacity = self.data.len();
-    }
-
-    pub fn recreate(&mut self, context: &GraphicsContext<'_, '_>) {
-        let gpu_buffer = context
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents: bytemuck::cast_slice(&self.data),
-                usage: self.usage,
-            });
-
-        self.gpu_buffer = Some(gpu_buffer);
-        self.gpu_capacity = self.data.len();
-        self.buffer_resized = true;
-    }
-
-    pub fn upload_all(&mut self, context: &GraphicsContext<'_, '_>, active_len: usize) {
-        self.ensure_created(context);
-
-        if active_len > self.gpu_capacity {
-            self.recreate(context);
-        }
-
-        context.queue.write_buffer(
-            self.gpu_buffer.as_ref().unwrap(),
-            0,
-            bytemuck::cast_slice(&self.data[0..active_len]),
-        );
-    }
-
-    pub fn upload_slot(&mut self, context: &GraphicsContext<'_, '_>, slot: usize, active_len: usize) {
-        self.ensure_created(context);
-
-        if active_len > self.gpu_capacity {
-            self.recreate(context);
-
-            // Full upload since the buffer was recreated.
-            context.queue.write_buffer(
-                self.gpu_buffer.as_ref().unwrap(),
-                0,
-                bytemuck::cast_slice(&self.data[0..active_len]),
-            );
-            return;
-        }
-
-        let byte_offset = (slot * std::mem::size_of::<T>()) as wgpu::BufferAddress;
-        context.queue.write_buffer(
-            self.gpu_buffer.as_ref().unwrap(),
-            byte_offset,
-            bytemuck::cast_slice(&self.data[slot..slot + 1]),
-        );
-    }
-
     pub fn gpu_buffer(&self) -> &wgpu::Buffer {
         self.gpu_buffer
             .as_ref()
@@ -190,9 +120,22 @@ impl<T: Default + Clone + bytemuck::Pod + bytemuck::Zeroable> GpuVec<T> {
     }
 
     /// Ensures the GPU buffer exists and has enough capacity.
-    /// Does NOT upload data — call before recording draw commands.
+    /// On resize, flushes current data to the old buffer first so any draw
+    /// commands already recorded against it see up-to-date values. wgpu's
+    /// write_buffer staging guarantee ensures the write lands before those
+    /// commands execute. The old buffer handle is then dropped — wgpu's
+    /// internal refcount keeps the GPU resource alive until commands finish.
     pub fn ensure_capacity(&mut self, context: &GraphicsContext<'_, '_>, active_len: usize) {
-        if self.gpu_buffer.is_none() {
+        if self.gpu_buffer.is_none() || active_len > self.gpu_capacity {
+            // Write current data to the old buffer before replacing it.
+            if let Some(old_buffer) = &self.gpu_buffer {
+                context.queue.write_buffer(
+                    old_buffer,
+                    0,
+                    bytemuck::cast_slice(&self.data[0..self.gpu_capacity]),
+                );
+            }
+
             self.gpu_buffer = Some(context.device.create_buffer(&wgpu::BufferDescriptor {
                 label: None,
                 size: (self.data.len() * std::mem::size_of::<T>()) as wgpu::BufferAddress,
@@ -201,29 +144,24 @@ impl<T: Default + Clone + bytemuck::Pod + bytemuck::Zeroable> GpuVec<T> {
             }));
             self.gpu_capacity = self.data.len();
             self.buffer_resized = true;
-        } else if active_len > self.gpu_capacity {
-            self.gpu_buffer = Some(context.device.create_buffer(&wgpu::BufferDescriptor {
-                label: None,
-                size: (self.data.len() * std::mem::size_of::<T>()) as wgpu::BufferAddress,
-                usage: self.usage,
-                mapped_at_creation: false,
-            }));
-            self.gpu_capacity = self.data.len();
-            self.buffer_resized = true;
+            self.dirty = true;
         }
     }
 
-    /// Uploads dirty data to the GPU. Does NOT resize — call ensure_capacity first.
+    /// Ensures the buffer exists and uploads dirty data to the GPU.
     pub fn flush(&mut self, context: &GraphicsContext<'_, '_>, active_len: usize) {
+        self.ensure_capacity(context, active_len);
+
         if !self.dirty {
             return;
         }
-        let Some(buffer) = &self.gpu_buffer else { return };
+
         context.queue.write_buffer(
-            buffer,
+            self.gpu_buffer.as_ref().unwrap(),
             0,
             bytemuck::cast_slice(&self.data[0..active_len]),
         );
+
         self.dirty = false;
     }
 }
@@ -313,8 +251,8 @@ where
         self.gpu.data(self.max_index)
     }
 
-    fn upload_all(&mut self, context: &GraphicsContext<'_, '_>) {
-        self.gpu.upload_all(context, self.max_index);
+    fn flush(&mut self, context: &GraphicsContext<'_, '_>) {
+        self.gpu.flush(context, self.max_index);
     }
 
     fn take_buffer_resized(&mut self) -> bool {
@@ -327,10 +265,6 @@ where
     ID: SlotId + Copy + Clone + PartialEq,
     T: Default + Clone + bytemuck::Pod + bytemuck::Zeroable,
 {
-    fn upload_slot(&mut self, context: &GraphicsContext<'_, '_>, id: ID) {
-        self.gpu.upload_slot(context, id.index(), self.max_index);
-    }
-
     fn contains(&self, id: ID) -> bool {
         self.ids.contains(&id)
     }
@@ -452,8 +386,8 @@ where
         self.gpu.data(self.max_index)
     }
 
-    fn upload_all(&mut self, context: &GraphicsContext<'_, '_>) {
-        self.gpu.upload_all(context, self.max_index);
+    fn flush(&mut self, context: &GraphicsContext<'_, '_>) {
+        self.gpu.flush(context, self.max_index);
     }
 
     fn take_buffer_resized(&mut self) -> bool {
@@ -466,10 +400,6 @@ where
     ID: SlotId + Copy + Clone + PartialEq,
     T: Default + Clone + bytemuck::Pod + bytemuck::Zeroable,
 {
-    fn upload_slot(&mut self, context: &GraphicsContext<'_, '_>, id: ID) {
-        self.gpu.upload_slot(context, id.index(), self.max_index);
-    }
-
     fn contains(&self, id: ID) -> bool {
         self.ids.contains(&id)
     }
