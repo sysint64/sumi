@@ -178,10 +178,10 @@ struct Renderers {
     outlined_circle: sumi::OutlinedCircleRenderer,
     colored_svg: sumi::ColoredSvgRenderer,
     svg: sumi::SvgRenderer,
-    svg_new: sumi::renderer::svg::SvgRenderer,
-    svg_instances: sumi::instances::BumpInstances<
-        sumi::renderer::svg::SvgMeshInstanceId,
-        sumi::renderer::svg::SvgMeshInstance,
+    svg_instances: sumi::instances::BumpInstances<sumi::SvgMeshInstanceId, sumi::SvgMeshInstance>,
+    colored_svg_instances: sumi::instances::BumpInstances<
+        sumi::ColoredSvgMeshInstanceId,
+        sumi::ColoredSvgMeshInstance,
     >,
     polyline: sumi::PolylineRenderer,
     text: sumi::TextRenderer,
@@ -259,28 +259,14 @@ impl RenderDemoRenderer<'_> {
             colored_plane: sumi::ColoredPlaneRenderer::<sumi::CenteredPlaneResources>::new(context),
             colored_plane_instances: sumi::instances::BumpInstances::new(10),
             svg_instances: sumi::instances::BumpInstances::new(10),
+            colored_svg_instances: sumi::instances::BumpInstances::new(10),
             filled_circle: sumi::FilledCircleRenderer::new(context, sumi::BumpInstances::new(10)),
             outlined_circle: sumi::OutlinedCircleRenderer::new(
                 context,
                 sumi::BumpInstances::new(10),
             ),
-            colored_svg: sumi::ColoredSvgRenderer::new(
-                context,
-                &resources.mesh_2d,
-                sumi::BumpBuffer::new(
-                    10,
-                    wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                ),
-            ),
-            svg: sumi::SvgRenderer::new(
-                context,
-                &resources.mesh_2d,
-                sumi::BumpBuffer::new(
-                    10,
-                    wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                ),
-            ),
-            svg_new: sumi::renderer::svg::SvgRenderer::new(context, &resources.mesh_2d_new),
+            colored_svg: sumi::ColoredSvgRenderer::new(context, &resources.mesh_2d),
+            svg: sumi::renderer::svg::SvgRenderer::new(context, &resources.mesh_2d_new),
             polyline: sumi::PolylineRenderer::new(context),
             text: sumi::TextRenderer::new(context),
             rounded_rect: sumi::RoundedRectRenderer::new(context, sumi::BumpInstances::new(10)),
@@ -566,7 +552,7 @@ fn render_demo(
         .render_all_instances(context, &resources.centered_plane);
 
     // Svg
-    let svg_renderer = &mut renderers.svg_new;
+    let svg_renderer = &mut renderers.svg;
 
     let instances = &mut renderers.svg_instances;
     instances.clear();
@@ -585,17 +571,17 @@ fn render_demo(
 
     // Colored Svg
     let colored_svg_renderer = &mut renderers.colored_svg;
-    let instances = colored_svg_renderer.instances();
+    let instances = &mut renderers.colored_svg_instances;
 
     instances.clear();
     instances.insert(sumi::ColoredSvgMeshInstance::new(
         state.goose.mesh_id,
         &state.goose_mvp_matrix,
-        &Vec4::new(1., 0.5, 0., 1.),
+        Vec4::new(1., 0.5, 0., 1.),
     ));
 
-    instances.flush(context);
-    colored_svg_renderer.render_all_instances(context, &resources.mesh_2d);
+    instances.upload_all(context);
+    colored_svg_renderer.render_all_instances(context, &resources.mesh_2d, instances);
 
     // Rounded rect
     let rr_size = Vec2::new(320. * view.scale_factor_f32, 100. * view.scale_factor_f32);
@@ -663,7 +649,7 @@ fn render_demo(
         .render_all_instances(context, fonts, &resources.text);
 
     if resources.mesh_2d_new.take_resized() {
-        renderers.svg_new.rebuild(context, &resources.mesh_2d_new);
+        renderers.svg.rebuild(context, &resources.mesh_2d_new);
     }
 }
 

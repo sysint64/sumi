@@ -1,10 +1,7 @@
 pub mod colored_plane;
-pub mod colored_plane_new;
-pub mod colored_svg_new;
 pub mod filled_circle;
 pub mod outlined_circle;
 pub mod polyline;
 pub mod rounded_rect;
 pub mod svg;
-pub mod svg_new;
 pub mod text;

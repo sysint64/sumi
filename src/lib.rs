@@ -23,18 +23,17 @@ pub use cosmic_text_kv::TextsResources;
 
 pub use resources::centered_plane::*;
 pub use resources::instancing_geometry::*;
-pub use resources::mesh_2d_new::*;
+pub use resources::mesh_2d::*;
 pub use resources::plane::*;
 pub use resources::polyline::*;
 pub use resources::vertex::*;
 
-pub use renderer::colored_plane_new::*;
-pub use renderer::colored_svg_new::*;
+pub use renderer::colored_plane::*;
 pub use renderer::filled_circle::*;
 pub use renderer::outlined_circle::*;
 pub use renderer::polyline::*;
 pub use renderer::rounded_rect::*;
-pub use renderer::svg_new::*;
+pub use renderer::svg::*;
 pub use renderer::text::*;
 
 pub mod prelude {

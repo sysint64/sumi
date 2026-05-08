@@ -1,27 +1,28 @@
-pub(crate) use std::mem;
+use std::marker::PhantomData;
+use std::mem;
 
 use glam::{Mat4, Vec4};
 
 use crate::graphics_context::GraphicsContext;
+use crate::instances::RenderInstances;
+use crate::memory_new::SlotId;
 use crate::resources::instancing_geometry::InstancingGeometry;
 use crate::resources::vertex::TexturedVertex;
 
-use crate::memory::{BumpInstances, InstanceId, Instances};
-
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, PartialEq)]
 pub struct ColoredPlaneInstanceId {
     value: u32,
 }
 
-impl InstanceId for ColoredPlaneInstanceId {
+impl SlotId for ColoredPlaneInstanceId {
+    fn from_index(index: usize) -> Self {
+        ColoredPlaneInstanceId {
+            value: index as u32,
+        }
+    }
+
     fn index(&self) -> usize {
         self.value as usize
-    }
-}
-
-impl PartialEq for ColoredPlaneInstanceId {
-    fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
     }
 }
 
@@ -75,26 +76,13 @@ impl ColoredPlaneInstance {
     }
 }
 
-pub struct ColoredPlaneRenderer<
-    I: Instances<ColoredPlaneInstanceId, ColoredPlaneInstance> = BumpInstances<
-        ColoredPlaneInstanceId,
-        ColoredPlaneInstance,
-    >,
-> {
+pub struct ColoredPlaneRenderer<G> {
     render_pipeline: wgpu::RenderPipeline,
-    instances: I,
+    phantom: PhantomData<G>,
 }
 
-impl<I: Instances<ColoredPlaneInstanceId, ColoredPlaneInstance>> ColoredPlaneRenderer<I> {
-    pub fn new(context: &GraphicsContext<'_, '_>, mut instances: I) -> Self {
-        instances.create_buffer(
-            context,
-            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            |index, _| ColoredPlaneInstanceId {
-                value: index as u32,
-            },
-        );
-
+impl<G: InstancingGeometry> ColoredPlaneRenderer<G> {
+    pub fn new(context: &GraphicsContext<'_, '_>) -> Self {
         let shader = context
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -141,63 +129,36 @@ impl<I: Instances<ColoredPlaneInstanceId, ColoredPlaneInstance>> ColoredPlaneRen
                             write_mask: wgpu::ColorWrites::ALL,
                         })],
                     }),
-                    primitive: wgpu::PrimitiveState {
-                        topology: wgpu::PrimitiveTopology::TriangleStrip,
-                        strip_index_format: Some(wgpu::IndexFormat::Uint16),
-                        front_face: wgpu::FrontFace::Cw,
-                        cull_mode: Some(wgpu::Face::Back),
-                        polygon_mode: wgpu::PolygonMode::Fill,
-                        unclipped_depth: false,
-                        conservative: false,
-                    },
-                    depth_stencil: None,
-                    multisample: wgpu::MultisampleState {
-                        count: context.sample_count,
-                        mask: !0,
-                        alpha_to_coverage_enabled: false,
-                    },
-                    multiview_mask: None,
+                    primitive: G::primitive(),
+                    depth_stencil: context.default_depth_stencil(),
+                    multisample: context.default_multisample(),
+                    multiview_mask: context.default_multiview_mask(),
                 });
 
         Self {
-            instances,
             render_pipeline,
+            phantom: PhantomData,
         }
     }
 
-    pub fn instances(&mut self) -> &mut I {
-        &mut self.instances
+    #[inline]
+    pub fn bind(&self, context: &mut GraphicsContext<'_, '_>) {
+        context.render_pass().set_pipeline(&self.render_pipeline);
     }
 
-    pub fn render_all_instances<T>(&mut self, context: &mut GraphicsContext<'_, '_>, geometry: &T)
-    where
-        T: InstancingGeometry,
+    pub fn render_all<I>(
+        &self,
+        context: &mut GraphicsContext<'_, '_>,
+        geometry: &G,
+        instances: &mut I,
+    ) where
+        I: RenderInstances<ColoredPlaneInstanceId, ColoredPlaneInstance>,
     {
-        for range in self.instances.ranges_iter() {
-            context.render_pass().set_pipeline(&self.render_pipeline);
-            context
-                .render_pass()
-                .set_vertex_buffer(1, self.instances.gpu_buffer().slice(..));
+        context.render_pass().set_pipeline(&self.render_pipeline);
+        instances.bind(1, context);
 
+        for range in instances.ranges(context) {
             geometry.render_instances(context, range);
         }
-    }
-
-    pub fn render_instance<T>(
-        &mut self,
-        context: &mut GraphicsContext<'_, '_>,
-        geometry: &T,
-        id: ColoredPlaneInstanceId,
-    ) where
-        T: InstancingGeometry,
-    {
-        debug_assert!(self.instances.contains(id), "Invalid ID");
-
-        context.render_pass().set_pipeline(&self.render_pipeline);
-        context
-            .render_pass()
-            .set_vertex_buffer(1, self.instances.gpu_buffer().slice(..));
-
-        geometry.render_instances(context, id.value..id.value + 1);
     }
 }
