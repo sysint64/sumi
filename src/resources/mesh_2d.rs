@@ -2,9 +2,7 @@ use glam::Vec2;
 use lyon::tessellation;
 use wgpu::util::DeviceExt;
 
-use crate::{
-    BumpBuffer, GpuBuffer, SlotId, graphics_context::GraphicsContext, memory::InstanceId, svg,
-};
+use crate::{GpuVec, SlotId, graphics_context::GraphicsContext, memory::InstanceId, svg};
 
 #[derive(Clone, Copy, Default)]
 pub struct SvgMesh {
@@ -187,9 +185,9 @@ impl Default for GPUPrimitivesBuck {
 
 pub struct Mesh2DResources {
     meshes: Vec<GPUMesh2DData>,
-    transforms: BumpBuffer<Mesh2DId, GPUTransformsBuck>,
-    primitives: BumpBuffer<Mesh2DId, GPUPrimitivesBuck>,
-    sizes: BumpBuffer<Mesh2DId, Mesh2DSize>,
+    transforms: GpuVec<GPUTransformsBuck>,
+    primitives: GpuVec<GPUPrimitivesBuck>,
+    sizes: GpuVec<Mesh2DSize>,
 }
 
 impl Default for Mesh2DResources {
@@ -204,9 +202,9 @@ impl Mesh2DResources {
 
         Self {
             meshes: Vec::new(),
-            primitives: BumpBuffer::new(8, usage),
-            transforms: BumpBuffer::new(8, usage),
-            sizes: BumpBuffer::new(8, usage),
+            primitives: GpuVec::new(8, usage),
+            transforms: GpuVec::new(8, usage),
+            sizes: GpuVec::new(8, usage),
         }
     }
 
@@ -314,9 +312,11 @@ impl Mesh2DResources {
             primitives.data[idx] = *primitive;
         }
 
-        let mesh_id = self.transforms.insert(transforms);
-        self.primitives.insert(primitives);
-        self.sizes.insert(mesh.size);
+        let mesh_id = Mesh2DId::from_index(self.transforms.len());
+
+        self.transforms.push(transforms);
+        self.primitives.push(primitives);
+        self.sizes.push(mesh.size);
 
         self.primitives.flush(context);
         self.transforms.flush(context);

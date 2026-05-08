@@ -39,5 +39,4 @@ pub use renderer::text::*;
 pub mod prelude {
     pub use crate::instances::{BumpInstances, PoolInstances, RenderInstances};
     pub use crate::memory::Instances;
-    pub use crate::memory_new::{GpuBuffer, SlottedBuffer};
 }

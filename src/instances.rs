@@ -1,7 +1,8 @@
+use std::marker::PhantomData;
 use std::ops::Range;
 
 use crate::graphics_context::GraphicsContext;
-use crate::memory_new::{BumpBuffer, GpuBuffer, PoolBuffer, SlotId};
+use crate::memory_new::{GpuPoolBuffer, GpuVec, SlotId};
 
 pub trait RenderInstances<ID, T> {
     type Drain: Iterator<Item = Range<u32>>;
@@ -115,8 +116,9 @@ where
     ID: SlotId + Copy + Clone + PartialEq,
     T: Default + Clone + bytemuck::Pod + bytemuck::Zeroable,
 {
-    buffer: BumpBuffer<ID, T>,
+    buffer: GpuVec<T>,
     drain_cursor: usize,
+    phantom: PhantomData<ID>,
 }
 
 impl<ID, T> BumpInstances<ID, T>
@@ -126,16 +128,19 @@ where
 {
     pub fn new(capacity: usize) -> Self {
         Self {
-            buffer: BumpBuffer::new(
+            buffer: GpuVec::new(
                 capacity,
                 wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             ),
             drain_cursor: 0,
+            phantom: PhantomData,
         }
     }
 
     pub fn insert(&mut self, data: T) -> ID {
-        self.buffer.insert(data)
+        self.buffer.push(data);
+
+        ID::from_index(self.buffer.len() - 1)
     }
 
     pub fn clear(&mut self) {
@@ -211,7 +216,7 @@ where
     ID: SlotId + Copy + Clone + PartialEq,
     T: Default + Clone + bytemuck::Pod + bytemuck::Zeroable,
 {
-    buffer: PoolBuffer<ID, T>,
+    buffer: GpuPoolBuffer<ID, T>,
     pending: Vec<ID>,
 }
 
@@ -222,7 +227,7 @@ where
 {
     pub fn new(capacity: usize) -> Self {
         Self {
-            buffer: PoolBuffer::new(
+            buffer: GpuPoolBuffer::new(
                 capacity,
                 wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             ),
@@ -259,7 +264,7 @@ where
             free_ids: self.buffer.free_ids.clone(),
             free_cursor: 0,
             cursor: 0,
-            max_index: self.buffer.max_index,
+            max_index: self.buffer.gpu.gpu_buffer_len,
         }
     }
 
