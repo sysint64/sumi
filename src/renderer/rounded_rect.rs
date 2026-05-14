@@ -3,24 +3,25 @@ use std::mem;
 use glam::{Mat4, Vec2, Vec4};
 
 use crate::graphics_context::GraphicsContext;
-use crate::memory::{BumpInstances, InstanceId, Instances};
+use crate::instances::RenderInstances;
+use crate::memory::SlotId;
 use crate::resources::instancing_geometry::InstancingGeometry;
 use crate::resources::vertex::TexturedVertex;
 
-#[derive(Default, Debug, Copy, Clone)]
+#[derive(Default, Debug, Copy, Clone, PartialEq)]
 pub struct RoundedRectInstanceId {
     value: u32,
 }
 
-impl InstanceId for RoundedRectInstanceId {
+impl SlotId for RoundedRectInstanceId {
+    fn from_index(index: usize) -> Self {
+        RoundedRectInstanceId {
+            value: index as u32,
+        }
+    }
+
     fn index(&self) -> usize {
         self.value as usize
-    }
-}
-
-impl PartialEq for RoundedRectInstanceId {
-    fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
     }
 }
 
@@ -47,20 +48,18 @@ impl BorderWidths {
 #[repr(C)]
 #[derive(Default, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct RoundedRectInstance {
-    mvp_matrix: [[f32; 4]; 4], // offset   0, 64 bytes
-    fill_color: [f32; 4],      // offset  64, 16 bytes
-    border_color: [f32; 4],    // offset  80, 16 bytes
-    border_widths: [f32; 4],   // offset  96, 16 bytes  (top, right, bottom, left)
-    size: [f32; 2],            // offset 112,  8 bytes
-    border_radius: f32,        // offset 120,  4 bytes
-    _pad: f32,                 // offset 124,  4 bytes
+    mvp_matrix: [[f32; 4]; 4],
+    fill_color: [f32; 4],
+    border_color: [f32; 4],
+
+    // (top, right, bottom, left)
+    border_widths: [f32; 4],
+    size: [f32; 2],
+    border_radius: f32,
+    _pad: f32,
 }
 
 impl RoundedRectInstance {
-    /// - `size`          — width and height in local pixel units (should match the
-    ///                     `scaling` used to build the MVP matrix).
-    /// - `border_radius` — corner radius in the same units as `size`.
-    /// - `border_widths` — per-side widths in the same units as `size`.
     pub fn new(
         mvp_matrix: &Mat4,
         size: Vec2,
@@ -140,26 +139,12 @@ impl RoundedRectInstance {
     }
 }
 
-pub struct RoundedRectRenderer<
-    I: Instances<RoundedRectInstanceId, RoundedRectInstance> = BumpInstances<
-        RoundedRectInstanceId,
-        RoundedRectInstance,
-    >,
-> {
+pub struct RoundedRectRenderer {
     render_pipeline: wgpu::RenderPipeline,
-    instances: I,
 }
 
-impl<I: Instances<RoundedRectInstanceId, RoundedRectInstance>> RoundedRectRenderer<I> {
-    pub fn new(context: &GraphicsContext<'_, '_>, mut instances: I) -> Self {
-        instances.create_buffer(
-            context,
-            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            |index, _| RoundedRectInstanceId {
-                value: index as u32,
-            },
-        );
-
+impl RoundedRectRenderer {
+    pub fn new(context: &GraphicsContext<'_, '_>) -> Self {
         let shader = context
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -224,43 +209,40 @@ impl<I: Instances<RoundedRectInstanceId, RoundedRectInstance>> RoundedRectRender
                     multiview_mask: None,
                 });
 
-        Self {
-            instances,
-            render_pipeline,
-        }
+        Self { render_pipeline }
     }
 
-    pub fn instances(&mut self) -> &mut I {
-        &mut self.instances
-    }
-
-    pub fn render_all_instances<T>(&mut self, context: &mut GraphicsContext<'_, '_>, geometry: &T)
-    where
+    pub fn render_all_instances<I, T>(
+        &self,
+        context: &mut GraphicsContext<'_, '_>,
+        geometry: &T,
+        instances: &mut I,
+    ) where
+        I: RenderInstances<RoundedRectInstanceId, RoundedRectInstance>,
         T: InstancingGeometry,
     {
-        for range in self.instances.ranges_iter() {
-            context.render_pass().set_pipeline(&self.render_pipeline);
-            context
-                .render_pass()
-                .set_vertex_buffer(1, self.instances.gpu_buffer().slice(..));
+        context.render_pass().set_pipeline(&self.render_pipeline);
+        instances.bind(1, context);
+
+        for range in instances.ranges(context) {
             geometry.render_instances(context, range);
         }
     }
 
-    pub fn render_instance<T>(
-        &mut self,
+    pub fn render_instance<I, T>(
+        &self,
         context: &mut GraphicsContext<'_, '_>,
         geometry: &T,
         id: RoundedRectInstanceId,
+        instances: &I,
     ) where
+        I: RenderInstances<RoundedRectInstanceId, RoundedRectInstance>,
         T: InstancingGeometry,
     {
-        debug_assert!(self.instances.contains(id), "Invalid ID");
-
         context.render_pass().set_pipeline(&self.render_pipeline);
         context
             .render_pass()
-            .set_vertex_buffer(1, self.instances.gpu_buffer().slice(..));
-        geometry.render_instances(context, id.value..id.value + 1);
+            .set_vertex_buffer(1, instances.gpu_buffer().slice(..));
+        geometry.render_instances(context, id.range());
     }
 }

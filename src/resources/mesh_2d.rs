@@ -2,7 +2,7 @@ use glam::Vec2;
 use lyon::tessellation;
 use wgpu::util::DeviceExt;
 
-use crate::{GpuVec, SlotId, graphics_context::GraphicsContext, memory::InstanceId, svg};
+use crate::{GpuVec, SlotId, graphics_context::GraphicsContext, svg};
 
 #[derive(Clone, Copy, Default)]
 pub struct SvgMesh {
@@ -16,7 +16,7 @@ pub struct Mesh2DId {
     pub value: usize,
 }
 
-#[derive(Debug, Default, Copy, Clone)]
+#[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub struct Mesh2DInstanceId {
     pub value: u32,
 }
@@ -43,17 +43,6 @@ impl SlotId for Mesh2DInstanceId {
     }
 }
 
-impl PartialEq for Mesh2DInstanceId {
-    fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
-    }
-}
-
-impl InstanceId for Mesh2DInstanceId {
-    fn index(&self) -> usize {
-        self.value as usize
-    }
-}
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]

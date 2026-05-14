@@ -114,13 +114,9 @@ impl PolylineRenderer {
                         topology: wgpu::PrimitiveTopology::TriangleList,
                         strip_index_format: None,
                     },
-                    depth_stencil: None,
-                    multisample: wgpu::MultisampleState {
-                        count: context.sample_count,
-                        mask: !0,
-                        alpha_to_coverage_enabled: false,
-                    },
-                    multiview_mask: None,
+                    depth_stencil: context.default_depth_stencil(),
+                    multisample: context.default_multisample(),
+                    multiview_mask: context.default_multiview_mask(),
                 });
 
         Self {

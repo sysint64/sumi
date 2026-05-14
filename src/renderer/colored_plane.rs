@@ -5,7 +5,7 @@ use glam::{Mat4, Vec4};
 
 use crate::graphics_context::GraphicsContext;
 use crate::instances::RenderInstances;
-use crate::memory_new::SlotId;
+use crate::memory::SlotId;
 use crate::resources::instancing_geometry::InstancingGeometry;
 use crate::resources::vertex::TexturedVertex;
 

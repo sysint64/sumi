@@ -118,8 +118,8 @@ impl Graphics {
 
     pub fn new(params: GraphicsCreateParams) -> Graphics {
         let caps = params.surface.get_capabilities(&params.adapter);
-        let surface_texture_format = caps.formats[0];
-        // let surface_texture_format = caps.formats[0].remove_srgb_suffix();
+        // let surface_texture_format = caps.formats[0];
+        let surface_texture_format = caps.formats[0].remove_srgb_suffix();
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -180,6 +180,7 @@ impl Graphics {
         gapi_ref as *mut Graphics
     }
 
+    #[allow(dead_code)]
     pub(crate) unsafe fn raw_new(params: GraphicsCreateParams) -> *mut u8 {
         let gapi = unsafe { Self::new_in_pool(params) };
 
@@ -321,7 +322,7 @@ impl Graphics {
         }
     }
 
-    pub fn graphics_context(&mut self, sample_count: u32) -> GraphicsContext {
+    pub fn graphics_context(&mut self, sample_count: u32) -> GraphicsContext<'_, '_> {
         GraphicsContext {
             surface_texture_format: self.surface_texture_format,
             render_pass: ptr::null_mut(),

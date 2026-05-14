@@ -3,7 +3,7 @@ use std::mem;
 use glam::Mat4;
 
 use crate::graphics_context::GraphicsContext;
-use crate::memory_new::SlotId;
+use crate::memory::SlotId;
 use crate::prelude::RenderInstances;
 use crate::resources::mesh_2d::Mesh2DResources;
 use crate::{Mesh2DId, Mesh2DVertex};

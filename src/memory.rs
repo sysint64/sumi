@@ -1,468 +1,158 @@
-use std::{cmp::Ordering, ops::Range};
+use std::ops::Range;
 
-use wgpu::util::DeviceExt;
+use crate::graphics_context::GraphicsContext;
 
-use crate::graphics_context::{GraphicsContext, LoadToGPUSchedule};
+pub trait SlotId: Sized {
+    fn from_index(index: usize) -> Self;
 
-pub trait InstanceId {
     fn index(&self) -> usize;
+
+    fn range(&self) -> Range<u32> {
+        self.index() as u32..self.index() as u32 + 1
+    }
 }
 
-pub trait Instances<ID, T> {
-    fn create_buffer(
-        &mut self,
-        context: &GraphicsContext<'_, '_>,
-        usage: wgpu::BufferUsages,
-        id_factory: fn(usize, &T) -> ID,
-    );
-
-    fn ranges_iter(&self) -> InstancesRangesIter<ID>;
-
-    fn contains(&self, id: ID) -> bool;
-
-    fn ids(&self) -> &[ID];
-
-    fn gpu_buffer(&self) -> &wgpu::Buffer;
-
-    fn occupied_buffer(&self) -> &[T];
-
-    fn full_buffer_data(&self) -> &[T];
-
-    fn instance_buffer(&self, id: ID) -> &[T];
-
-    fn load_instance_to_gpu(
-        &mut self,
-        context: &GraphicsContext<'_, '_>,
-        schedule: LoadToGPUSchedule,
-        id: ID,
-    );
-
-    fn load_all_instances_to_gpu(
-        &mut self,
-        context: &GraphicsContext<'_, '_>,
-        schedule: LoadToGPUSchedule,
-    );
-
-    fn take_buffer_resized(&mut self) -> bool;
-}
-
-pub struct PoolInstances<ID, T> {
-    buffer_data: Vec<T>,
+pub struct GpuVec<T> {
+    data: Vec<T>,
     gpu_buffer: Option<wgpu::Buffer>,
-    removed_ids: Vec<ID>,
-    ids: Vec<ID>,
-    max_index: usize,
-    id_factory: Option<fn(usize, &T) -> ID>,
-    gpu_capacity: usize,
+    pub(crate) gpu_buffer_len: usize,
+    gpu_buffer_capacity: usize,
     buffer_resized: bool,
+    dirty: bool,
+    usage: wgpu::BufferUsages,
 }
 
-pub struct BumpInstances<ID, T> {
-    buffer_data: Vec<T>,
-    gpu_buffer: Option<wgpu::Buffer>,
-    ids: Vec<ID>,
-    max_index: usize,
-    id_factory: Option<fn(usize, &T) -> ID>,
-    gpu_capacity: usize,
-    buffer_resized: bool,
-}
-
-pub struct InstancesRangesIter<ID> {
-    removed_ids: Vec<ID>,
-    current_id_index: usize,
-    len: usize,
-    last_index: usize,
-}
-
-impl<ID: InstanceId> Iterator for InstancesRangesIter<ID> {
-    type Item = Range<u32>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.current_id_index.cmp(&self.removed_ids.len()) {
-            Ordering::Less => {
-                let next_index = self.removed_ids[self.current_id_index].index();
-
-                if self.last_index == next_index {
-                    self.current_id_index += 1;
-                    self.last_index = self.current_id_index;
-
-                    return self.next();
-                }
-
-                // Skip consequent removed indexes
-                let mut idx = self.removed_ids[self.current_id_index].index();
-                self.current_id_index += 1;
-
-                while self.current_id_index < self.removed_ids.len()
-                    && self.removed_ids[self.current_id_index].index() - idx == 1
-                {
-                    idx = self.removed_ids[self.current_id_index].index();
-                    self.current_id_index += 1;
-                }
-
-                let range = self.last_index as u32..next_index as u32;
-                self.last_index = self.current_id_index + 1;
-
-                Some(range)
-            }
-            Ordering::Equal => {
-                if self.len == 0 || self.removed_ids.last().map(|v| v.index()) == Some(self.len - 1)
-                {
-                    None
-                } else {
-                    self.current_id_index += 1;
-
-                    Some(self.last_index as u32..self.len as u32)
-                }
-            }
-            Ordering::Greater => None,
-        }
-    }
-}
-
-impl<ID, T> Instances<ID, T> for BumpInstances<ID, T>
-where
-    ID: InstanceId + Copy + Clone + PartialEq,
-    T: Default + Clone + bytemuck::Pod + bytemuck::Zeroable,
-{
-    fn create_buffer(
-        &mut self,
-        context: &GraphicsContext<'_, '_>,
-        usage: wgpu::BufferUsages,
-        id_factory: fn(usize, &T) -> ID,
-    ) {
-        debug_assert!(self.gpu_buffer.is_none(), "Buffer already has created");
-
-        let gpu_buffer = context
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("SVG Shader Instance Buffer"),
-                contents: bytemuck::cast_slice(self.full_buffer_data()),
-                usage,
-            });
-
-        self.id_factory = Some(id_factory);
-        self.gpu_buffer = Some(gpu_buffer);
-        self.gpu_capacity = self.buffer_data.len();
-    }
-
-    fn load_instance_to_gpu(
-        &mut self,
-        context: &GraphicsContext<'_, '_>,
-        schedule: LoadToGPUSchedule,
-        id: ID,
-    ) {
-        if self.max_index > self.gpu_capacity {
-            self.recreate_gpu_buffer(context);
-            context.queue.write_buffer(
-                self.gpu_buffer(),
-                0,
-                bytemuck::cast_slice(self.occupied_buffer()),
-            );
-            if schedule == LoadToGPUSchedule::Immediately {
-                context.queue.submit([]);
-            }
-            return;
-        }
-
-        let instance_size = std::mem::size_of::<T>();
-        let byte_offset =
-            (id.index() as wgpu::BufferAddress) * (instance_size as wgpu::BufferAddress);
-
-        context.queue.write_buffer(
-            self.gpu_buffer(),
-            byte_offset,
-            bytemuck::cast_slice(self.instance_buffer(id)),
-        );
-
-        if schedule == LoadToGPUSchedule::Immediately {
-            context.queue.submit([]);
+impl<T: Default + Clone + bytemuck::Pod + bytemuck::Zeroable> GpuVec<T> {
+    pub fn new(capacity: usize, usage: wgpu::BufferUsages) -> Self {
+        Self {
+            data: vec![T::default(); capacity],
+            gpu_buffer: None,
+            gpu_buffer_len: 0,
+            gpu_buffer_capacity: 0,
+            buffer_resized: false,
+            dirty: false,
+            usage,
         }
     }
 
-    fn load_all_instances_to_gpu(
-        &mut self,
-        context: &GraphicsContext<'_, '_>,
-        schedule: LoadToGPUSchedule,
-    ) {
-        if self.max_index > self.gpu_capacity {
-            self.recreate_gpu_buffer(context);
-        }
-
-        context.queue.write_buffer(
-            self.gpu_buffer(),
-            0,
-            bytemuck::cast_slice(self.occupied_buffer()),
-        );
-
-        if schedule == LoadToGPUSchedule::Immediately {
-            context.queue.submit([]);
-        }
-    }
-
-    fn take_buffer_resized(&mut self) -> bool {
-        let was = self.buffer_resized;
-        self.buffer_resized = false;
-        was
-    }
-
-    #[inline]
-    fn gpu_buffer(&self) -> &wgpu::Buffer {
+    pub fn gpu_buffer(&self) -> &wgpu::Buffer {
         self.gpu_buffer
             .as_ref()
             .expect("Buffer has not been created")
     }
 
-    fn ranges_iter(&self) -> InstancesRangesIter<ID> {
-        InstancesRangesIter {
-            removed_ids: vec![],
-            current_id_index: 0,
-            len: self.max_index,
-            last_index: 0,
-        }
+    pub fn data(&self) -> &[T] {
+        &self.data[0..self.gpu_buffer_len]
     }
 
-    fn contains(&self, id: ID) -> bool {
-        self.ids.contains(&id)
-    }
+    pub fn take_buffer_resized(&mut self) -> bool {
+        let was = self.buffer_resized;
+        self.buffer_resized = false;
 
-    fn ids(&self) -> &[ID] {
-        &self.ids
-    }
-
-    fn occupied_buffer(&self) -> &[T] {
-        &self.buffer_data[0..self.max_index]
-    }
-
-    fn full_buffer_data(&self) -> &[T] {
-        &self.buffer_data
-    }
-
-    fn instance_buffer(&self, id: ID) -> &[T] {
-        let idx = id.index();
-
-        debug_assert!(idx < self.max_index, "Instance not found");
-
-        &self.buffer_data[idx..(idx + 1)]
-    }
-}
-
-impl<ID, T> BumpInstances<ID, T>
-where
-    ID: InstanceId + Copy + Clone + PartialEq,
-    T: Default + Clone,
-{
-    pub fn new(capacity: usize) -> Self {
-        Self {
-            buffer_data: vec![T::default(); capacity],
-            ids: Vec::with_capacity(capacity),
-            max_index: 0,
-            id_factory: None,
-            gpu_buffer: None,
-            gpu_capacity: 0,
-            buffer_resized: false,
-        }
+        was
     }
 
     pub fn len(&self) -> usize {
-        self.ids.len()
+        self.gpu_buffer_len
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.gpu_buffer_len == 0
     }
 
-    pub fn insert(&mut self, data: T) -> ID {
-        let id_factory = self
-            .id_factory
-            .expect("Instances has not been initizalized");
+    pub fn push(&mut self, data: T) {
+        let index = self.gpu_buffer_len;
+        self.gpu_buffer_len += 1;
 
-        let index = self.max_index;
-        self.max_index += 1;
-
-        if index >= self.buffer_data.len() {
-            self.buffer_data
-                .resize(self.buffer_data.len() * 2, T::default());
+        if index >= self.data.len() {
+            self.data.resize(self.data.len() * 2, T::default());
         }
 
-        let id = id_factory(index, &data);
-        self.buffer_data[index] = data;
-
-        self.ids.push(id);
-
-        id
+        self.data[index] = data;
+        self.dirty = true;
     }
 
-    fn recreate_gpu_buffer(&mut self, context: &GraphicsContext<'_, '_>)
-    where
-        T: bytemuck::Pod + bytemuck::Zeroable,
-    {
-        let gpu_buffer = context
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("SVG Shader Instance Buffer"),
-                contents: bytemuck::cast_slice(&self.buffer_data),
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            });
-        self.gpu_buffer = Some(gpu_buffer);
-        self.gpu_capacity = self.buffer_data.len();
-        self.buffer_resized = true;
-    }
+    pub fn update(&mut self, index: usize, data: T) {
+        // debug_assert!(self.ids.contains(&id), "Slot has not been allocated");
+        if index >= self.gpu_buffer_len {
+            panic!(
+                "Out of bound, index: {}, len: {}",
+                index, self.gpu_buffer_len
+            );
+        }
 
-    pub fn update_instance(&mut self, id: ID, data: T) {
-        debug_assert!(self.ids.contains(&id), "Instance has not been allocated");
-
-        self.buffer_data[id.index()] = data;
+        self.data[index] = data;
+        self.dirty = true;
     }
 
     pub fn clear(&mut self) {
-        self.max_index = 0;
-        self.ids.clear();
-    }
-}
-
-impl<ID, T> Instances<ID, T> for PoolInstances<ID, T>
-where
-    ID: InstanceId + Copy + Clone + PartialEq,
-    T: Default + Clone + bytemuck::Pod + bytemuck::Zeroable,
-{
-    fn create_buffer(
-        &mut self,
-        context: &GraphicsContext<'_, '_>,
-        usage: wgpu::BufferUsages,
-        id_factory: fn(usize, &T) -> ID,
-    ) {
-        debug_assert!(self.gpu_buffer.is_none(), "Buffer already has created");
-
-        let gpu_buffer = context
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("SVG Shader Instance Buffer"),
-                contents: bytemuck::cast_slice(self.full_buffer_data()),
-                usage,
-            });
-
-        self.id_factory = Some(id_factory);
-        self.gpu_buffer = Some(gpu_buffer);
-        self.gpu_capacity = self.buffer_data.len();
+        self.gpu_buffer_len = 0;
     }
 
-    fn load_instance_to_gpu(
-        &mut self,
-        context: &GraphicsContext<'_, '_>,
-        schedule: LoadToGPUSchedule,
-        id: ID,
-    ) {
-        if self.max_index > self.gpu_capacity {
-            self.recreate_gpu_buffer(context);
-            context.queue.write_buffer(
-                self.gpu_buffer(),
-                0,
-                bytemuck::cast_slice(self.occupied_buffer()),
-            );
-            if schedule == LoadToGPUSchedule::Immediately {
-                context.queue.submit([]);
+    /// Ensures the GPU buffer exists and has enough capacity.
+    ///
+    /// On resize, flushes current data to the old buffer first so any draw
+    /// commands already recorded against it see up-to-date values. wgpu's
+    /// write_buffer staging guarantee ensures the write lands before those
+    /// commands execute. The old buffer handle is then dropped — wgpu's
+    /// internal refcount keeps the GPU resource alive until commands finish.
+    pub fn ensure_capacity(&mut self, context: &GraphicsContext<'_, '_>) {
+        if self.gpu_buffer.is_none() || self.gpu_buffer_len > self.gpu_buffer_capacity {
+            // Write current data to the old buffer before replacing it.
+            if let Some(old_buffer) = &self.gpu_buffer {
+                context.queue.write_buffer(
+                    old_buffer,
+                    0,
+                    bytemuck::cast_slice(&self.data[0..self.gpu_buffer_capacity]),
+                );
             }
+
+            self.gpu_buffer = Some(context.device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: (self.data.len() * std::mem::size_of::<T>()) as wgpu::BufferAddress,
+                usage: self.usage,
+                mapped_at_creation: false,
+            }));
+            self.gpu_buffer_capacity = self.data.len();
+            self.buffer_resized = true;
+            self.dirty = true;
+        }
+    }
+
+    /// Ensures the buffer exists and uploads dirty data to the GPU.
+    pub fn flush(&mut self, context: &GraphicsContext<'_, '_>) {
+        self.ensure_capacity(context);
+
+        if !self.dirty {
             return;
         }
 
-        let instance_size = std::mem::size_of::<T>();
-        let byte_offset =
-            (id.index() as wgpu::BufferAddress) * (instance_size as wgpu::BufferAddress);
-
         context.queue.write_buffer(
-            self.gpu_buffer(),
-            byte_offset,
-            bytemuck::cast_slice(self.instance_buffer(id)),
-        );
-
-        if schedule == LoadToGPUSchedule::Immediately {
-            context.queue.submit([]);
-        }
-    }
-
-    fn load_all_instances_to_gpu(
-        &mut self,
-        context: &GraphicsContext<'_, '_>,
-        schedule: LoadToGPUSchedule,
-    ) {
-        if self.max_index > self.gpu_capacity {
-            self.recreate_gpu_buffer(context);
-        }
-
-        context.queue.write_buffer(
-            self.gpu_buffer(),
+            self.gpu_buffer.as_ref().unwrap(),
             0,
-            bytemuck::cast_slice(self.occupied_buffer()),
+            bytemuck::cast_slice(&self.data[0..self.gpu_buffer_len]),
         );
 
-        if schedule == LoadToGPUSchedule::Immediately {
-            context.queue.submit([]);
-        }
-    }
-
-    fn take_buffer_resized(&mut self) -> bool {
-        let was = self.buffer_resized;
-        self.buffer_resized = false;
-        was
-    }
-
-    #[inline]
-    fn gpu_buffer(&self) -> &wgpu::Buffer {
-        self.gpu_buffer
-            .as_ref()
-            .expect("Buffer has not been created")
-    }
-
-    fn ranges_iter(&self) -> InstancesRangesIter<ID> {
-        InstancesRangesIter {
-            removed_ids: self.removed_ids.clone(),
-            current_id_index: 0,
-            len: self.max_index,
-            last_index: 0,
-        }
-    }
-
-    fn contains(&self, id: ID) -> bool {
-        self.ids.contains(&id)
-    }
-
-    fn ids(&self) -> &[ID] {
-        &self.ids
-    }
-
-    fn occupied_buffer(&self) -> &[T] {
-        &self.buffer_data[0..self.max_index]
-    }
-
-    fn full_buffer_data(&self) -> &[T] {
-        &self.buffer_data
-    }
-
-    fn instance_buffer(&self, id: ID) -> &[T] {
-        let idx = id.index();
-
-        debug_assert!(idx < self.max_index, "Instance not found");
-        debug_assert!(
-            !self.removed_ids.contains(&id),
-            "Instance marked as removed"
-        );
-
-        &self.buffer_data[idx..idx + 1]
+        self.dirty = false;
     }
 }
 
-impl<ID: InstanceId + Copy + Clone + PartialEq, T: Default + Clone> PoolInstances<ID, T> {
-    pub fn new(capacity: usize) -> Self {
+pub struct GpuPoolBuffer<ID, T> {
+    pub(crate) gpu: GpuVec<T>,
+    pub(crate) free_ids: Vec<ID>,
+    ids: Vec<ID>,
+}
+
+impl<ID, T> GpuPoolBuffer<ID, T>
+where
+    ID: SlotId + Copy + Clone + PartialEq,
+    T: Default + Clone + bytemuck::Pod + bytemuck::Zeroable,
+{
+    pub fn new(capacity: usize, usage: wgpu::BufferUsages) -> Self {
         Self {
-            buffer_data: vec![T::default(); capacity],
-            removed_ids: Vec::with_capacity(capacity),
+            gpu: GpuVec::new(capacity, usage),
+            free_ids: Vec::with_capacity(capacity),
             ids: Vec::with_capacity(capacity),
-            max_index: 0,
-            id_factory: None,
-            gpu_buffer: None,
-            gpu_capacity: 0,
-            buffer_resized: false,
         }
     }
 
@@ -471,56 +161,26 @@ impl<ID: InstanceId + Copy + Clone + PartialEq, T: Default + Clone> PoolInstance
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.ids.is_empty()
     }
 
     pub fn insert(&mut self, data: T) -> ID {
-        let id_factory = self
-            .id_factory
-            .expect("Instances has not been initizalized");
+        let id = if self.free_ids.is_empty() {
+            self.gpu.push(data);
 
-        let index = if self.removed_ids.is_empty() {
-            let idx = self.max_index;
-            self.max_index += 1;
-
-            if idx >= self.buffer_data.len() {
-                self.buffer_data
-                    .resize(self.buffer_data.len() * 2, T::default());
-            }
-
-            idx
+            ID::from_index(self.gpu.len() - 1)
         } else {
-            self.removed_ids.pop().unwrap().index()
+            let index = self.free_ids.pop().unwrap().index();
+
+            self.gpu.data[index] = data;
+            self.gpu.dirty = true;
+
+            ID::from_index(index)
         };
 
-        let id = id_factory(index, &data);
-        self.buffer_data[index] = data;
-
         self.ids.push(id);
 
         id
-    }
-
-    fn recreate_gpu_buffer(&mut self, context: &GraphicsContext<'_, '_>)
-    where
-        T: bytemuck::Pod + bytemuck::Zeroable,
-    {
-        let gpu_buffer = context
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("SVG Shader Instance Buffer"),
-                contents: bytemuck::cast_slice(&self.buffer_data),
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            });
-        self.gpu_buffer = Some(gpu_buffer);
-        self.gpu_capacity = self.buffer_data.len();
-        self.buffer_resized = true;
-    }
-
-    pub fn clear(&mut self) {
-        self.max_index = 0;
-        self.ids.clear();
-        self.removed_ids.clear();
     }
 
     pub fn remove(&mut self, id: ID) {
@@ -528,300 +188,315 @@ impl<ID: InstanceId + Copy + Clone + PartialEq, T: Default + Clone> PoolInstance
             .ids
             .iter()
             .position(|other| *other == id)
-            .expect("Id has not been found");
+            .expect("Id not found");
         self.ids.remove(index);
-        self.removed_ids.push(id);
-        self.removed_ids.sort_by_key(|a| a.index());
+        self.free_ids.push(id);
+        self.free_ids.sort_by_key(|a| a.index());
+    }
+
+    pub fn update(&mut self, id: ID, data: T) {
+        debug_assert!(self.ids.contains(&id), "Slot has not been allocated");
+        self.gpu.data[id.index()] = data;
+        self.gpu.dirty = true;
+    }
+
+    pub fn clear(&mut self) {
+        self.gpu.clear();
+        self.ids.clear();
+        self.free_ids.clear();
+    }
+
+    pub fn ensure_capacity(&mut self, context: &GraphicsContext<'_, '_>) {
+        self.gpu.ensure_capacity(context);
+    }
+
+    pub fn flush(&mut self, context: &GraphicsContext<'_, '_>) {
+        self.gpu.flush(context);
+    }
+
+    pub fn ids(&self) -> &[ID] {
+        &self.ids
+    }
+
+    pub fn gpu_buffer(&self) -> &wgpu::Buffer {
+        self.gpu.gpu_buffer()
+    }
+
+    pub fn data(&self) -> &[T] {
+        self.gpu.data()
+    }
+
+    pub fn take_buffer_resized(&mut self) -> bool {
+        self.gpu.take_buffer_resized()
+    }
+
+    pub fn contains(&self, id: ID) -> bool {
+        self.ids.contains(&id)
+    }
+
+    pub fn slot_data(&self, id: ID) -> &[T] {
+        let idx = id.index();
+        debug_assert!(idx < self.gpu.len(), "Slot not found");
+        debug_assert!(!self.free_ids.contains(&id), "Slot has been removed");
+        &self.gpu.data[idx..idx + 1]
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ops::Range;
 
-    // Mock implementation of InstanceId for testing
     #[derive(Copy, Clone, PartialEq, Debug)]
     struct TestId(usize);
 
-    impl InstanceId for TestId {
+    impl SlotId for TestId {
+        fn from_index(index: usize) -> Self {
+            TestId(index)
+        }
+
         fn index(&self) -> usize {
             self.0
         }
     }
 
-    fn create_test_instances() -> PoolInstances<TestId, i32> {
-        PoolInstances {
-            buffer_data: vec![0; 10], // Pre-allocate some space
-            removed_ids: Vec::new(),
-            ids: Vec::new(),
-            max_index: 0,
-            id_factory: Some(|idx, _| TestId(idx)),
-            gpu_buffer: None,
-            gpu_capacity: 10,
-            buffer_resized: false,
-        }
+    fn make_pool(capacity: usize) -> GpuPoolBuffer<TestId, i32> {
+        GpuPoolBuffer::new(capacity, wgpu::BufferUsages::VERTEX)
     }
 
     #[test]
-    fn test_add_instance() {
-        let mut instances = create_test_instances();
+    fn test_pool_insert() {
+        let mut buffer = make_pool(10);
 
-        let id1 = instances.insert(42);
+        let id1 = buffer.insert(42);
         assert_eq!(id1.index(), 0);
-        assert_eq!(instances.buffer_data[0], 42);
-        assert_eq!(instances.max_index, 1);
+        assert_eq!(buffer.slot_data(id1)[0], 42);
+        assert_eq!(buffer.gpu.gpu_buffer_len, 1);
 
-        let id2 = instances.insert(24);
+        let id2 = buffer.insert(24);
         assert_eq!(id2.index(), 1);
-        assert_eq!(instances.buffer_data[1], 24);
-        assert_eq!(instances.max_index, 2);
+        assert_eq!(buffer.slot_data(id2)[0], 24);
+        assert_eq!(buffer.gpu.gpu_buffer_len, 2);
     }
 
     #[test]
-    fn test_remove_instance() {
-        let mut instances = create_test_instances();
+    fn test_pool_remove() {
+        let mut buffer = make_pool(10);
 
-        let id1 = instances.insert(42);
-        let id2 = instances.insert(24);
+        let id1 = buffer.insert(42);
+        let id2 = buffer.insert(24);
 
-        instances.remove(id1);
-        assert!(!instances.ids().contains(&id1));
-        assert!(instances.ids().contains(&id2));
-        assert_eq!(instances.removed_ids.len(), 1);
-        assert_eq!(instances.removed_ids[0], id1);
+        buffer.remove(id1);
+        assert!(!buffer.ids().contains(&id1));
+        assert!(buffer.ids().contains(&id2));
+        assert_eq!(buffer.free_ids.len(), 1);
+        assert_eq!(buffer.free_ids[0], id1);
     }
 
     #[test]
-    fn test_reuse_removed_index() {
-        let mut instances = create_test_instances();
+    fn test_pool_slot_reuse() {
+        let mut buffer = make_pool(10);
 
-        let id1 = instances.insert(42);
-        instances.remove(id1);
+        let id1 = buffer.insert(42);
+        buffer.remove(id1);
 
-        let id2 = instances.insert(24);
+        let id2 = buffer.insert(24);
         assert_eq!(id1.index(), id2.index());
-        assert!(instances.removed_ids.is_empty());
+        assert!(buffer.free_ids.is_empty());
     }
 
     #[test]
-    fn test_ranges_iter() {
-        let mut instances = create_test_instances();
+    fn test_pool_grow() {
+        let mut buffer = make_pool(2);
 
-        instances.insert(1);
-        let id2 = instances.insert(2);
-        let id3 = instances.insert(3);
-        instances.insert(4);
+        buffer.insert(1);
+        buffer.insert(2);
+        buffer.insert(3);
 
-        instances.remove(id2);
-        instances.remove(id3);
-
-        let ranges: Vec<Range<u32>> = instances.ranges_iter().collect();
-
-        println!("{:?}", ranges);
-
-        assert_eq!(ranges.len(), 2);
-        assert_eq!(ranges[0], (0..1));
-        assert_eq!(ranges[1], (3..4));
+        assert_eq!(buffer.len(), 3);
+        assert_eq!(buffer.slot_data(TestId(2))[0], 3);
     }
 
     #[test]
-    fn test_ranges_empty_iter() {
-        let instances = create_test_instances();
-        let ranges: Vec<Range<u32>> = instances.ranges_iter().collect();
+    fn test_pool_slot_reuse_no_grow() {
+        let mut buffer = make_pool(2);
 
-        assert_eq!(ranges.len(), 0);
+        let id0 = buffer.insert(1);
+        buffer.insert(2);
+        buffer.remove(id0);
+        let id_reused = buffer.insert(99);
+
+        assert_eq!(id_reused.index(), 0);
+        assert_eq!(buffer.slot_data(id_reused)[0], 99);
     }
 
     #[test]
-    fn test_ranges_iter_when_remove_last_item() {
-        let mut instances = create_test_instances();
-
-        instances.insert(1);
-        let id2 = instances.insert(2);
-        instances.insert(3);
-        let id4 = instances.insert(4);
-
-        instances.remove(id2);
-        instances.remove(id4);
-
-        let ranges: Vec<Range<u32>> = instances.ranges_iter().collect();
-
-        assert_eq!(ranges.len(), 2);
-        assert_eq!(ranges[0], (0..1));
-        assert_eq!(ranges[1], (2..3));
+    fn test_buffer_resized_false_initially() {
+        let mut buffer = make_pool(4);
+        assert!(!buffer.take_buffer_resized());
     }
 
     #[test]
-    fn test_ranges_iter_when_remove_first_item() {
-        let mut instances = create_test_instances();
+    fn test_pool_update() {
+        let mut buffer = make_pool(10);
 
-        let id1 = instances.insert(1);
-        instances.insert(2);
-        instances.insert(3);
-        instances.insert(4);
+        let id = buffer.insert(42);
+        buffer.update(id, 99);
 
-        instances.remove(id1);
-
-        let ranges: Vec<Range<u32>> = instances.ranges_iter().collect();
-
-        println!("RANGES: {:?}", ranges);
-
-        assert_eq!(ranges.len(), 1);
-        assert_eq!(ranges[0], (1..4));
+        assert_eq!(buffer.slot_data(id)[0], 99);
     }
 
     #[test]
-    fn test_ranges_iter_when_remove_first_consequent_items() {
-        let mut instances = create_test_instances();
+    fn test_pool_contains() {
+        let mut buffer = make_pool(10);
 
-        let id1 = instances.insert(1);
-        let id2 = instances.insert(2);
-        instances.insert(3);
-        instances.insert(4);
+        let id1 = buffer.insert(1);
+        let id2 = buffer.insert(2);
 
-        instances.remove(id1);
-        instances.remove(id2);
+        assert!(buffer.contains(id1));
+        assert!(buffer.contains(id2));
 
-        let ranges: Vec<Range<u32>> = instances.ranges_iter().collect();
+        buffer.remove(id1);
 
-        println!("RANGES: {:?}", ranges);
-
-        assert_eq!(ranges.len(), 1);
-        assert_eq!(ranges[0], (2..4));
+        assert!(!buffer.contains(id1));
+        assert!(buffer.contains(id2));
     }
 
     #[test]
-    fn test_ranges_iter_when_remove_last_consequent_items() {
-        let mut instances = create_test_instances();
+    fn test_pool_len_tracks_active_slots() {
+        let mut buffer = make_pool(10);
 
-        instances.insert(1);
-        instances.insert(2);
-        let id3 = instances.insert(3);
-        let id4 = instances.insert(4);
-        instances.insert(5);
-        let id6 = instances.insert(6);
+        assert_eq!(buffer.len(), 0);
 
-        instances.remove(id3);
-        instances.remove(id4);
-        instances.remove(id6);
+        let id1 = buffer.insert(1);
+        assert_eq!(buffer.len(), 1);
 
-        let ranges: Vec<Range<u32>> = instances.ranges_iter().collect();
+        buffer.insert(2);
+        assert_eq!(buffer.len(), 2);
 
-        assert_eq!(ranges.len(), 2);
-        assert_eq!(ranges[0], (0..2));
-        assert_eq!(ranges[1], (3..5));
+        buffer.remove(id1);
+        assert_eq!(buffer.len(), 1);
     }
 
     #[test]
-    fn test_ranges_without_removing_iter() {
-        let mut instances = create_test_instances();
+    fn test_pool_is_empty() {
+        let mut buffer = make_pool(10);
 
-        instances.insert(1);
-        instances.insert(2);
-        instances.insert(3);
-        instances.insert(4);
+        assert!(buffer.is_empty());
 
-        let ranges: Vec<Range<u32>> = instances.ranges_iter().collect();
+        let id = buffer.insert(1);
+        assert!(!buffer.is_empty());
 
-        assert_eq!(ranges.len(), 1);
-        assert_eq!(ranges[0], (0..4));
+        buffer.remove(id);
+        assert!(buffer.is_empty());
     }
 
     #[test]
-    fn test_ranges_with_all_removed() {
-        let mut instances = create_test_instances();
+    fn test_pool_clear() {
+        let mut buffer = make_pool(10);
 
-        let id1 = instances.insert(1);
-        let id2 = instances.insert(2);
-        let id3 = instances.insert(3);
-        let id4 = instances.insert(4);
+        buffer.insert(1);
+        buffer.insert(2);
+        let id3 = buffer.insert(3);
+        buffer.remove(id3);
 
-        instances.remove(id1);
-        instances.remove(id2);
-        instances.remove(id3);
-        instances.remove(id4);
+        buffer.clear();
 
-        let ranges: Vec<Range<u32>> = instances.ranges_iter().collect();
-
-        assert_eq!(ranges.len(), 0);
+        assert!(buffer.is_empty());
+        assert_eq!(buffer.len(), 0);
+        assert!(buffer.free_ids.is_empty());
+        assert_eq!(buffer.gpu.gpu_buffer_len, 0);
     }
 
     #[test]
-    fn test_bump_instances_grow_on_overflow() {
-        let mut instances = BumpInstances {
-            buffer_data: vec![0i32; 2],
-            ids: Vec::new(),
-            max_index: 0,
-            id_factory: Some(|idx, _| TestId(idx)),
-            gpu_buffer: None,
-            gpu_capacity: 0,
-            buffer_resized: false,
-        };
+    fn test_pool_gpu_len_does_not_shrink_on_remove() {
+        let mut buffer = make_pool(10);
 
-        instances.insert(1);
-        instances.insert(2);
-        instances.insert(3); // exceeds initial capacity of 2
+        buffer.insert(1);
+        buffer.insert(2);
+        let id3 = buffer.insert(3);
 
-        assert_eq!(instances.buffer_data.len(), 4); // grew 2x
-        assert_eq!(instances.max_index, 3);
-        assert_eq!(instances.buffer_data[2], 3);
+        assert_eq!(buffer.gpu.gpu_buffer_len, 3);
+
+        buffer.remove(id3);
+
+        // gpu_buffer_len covers the high-water mark; active len drops but gpu len stays
+        assert_eq!(buffer.gpu.gpu_buffer_len, 3);
+        assert_eq!(buffer.len(), 2);
+    }
+
+    // GpuVec tests --------------------------------------------------------------------------------
+
+    fn make_gpu_vec(capacity: usize) -> GpuVec<i32> {
+        GpuVec::new(capacity, wgpu::BufferUsages::VERTEX)
     }
 
     #[test]
-    fn test_pool_instances_grow_on_overflow() {
-        let mut instances = PoolInstances {
-            buffer_data: vec![0i32; 2],
-            removed_ids: Vec::new(),
-            ids: Vec::new(),
-            max_index: 0,
-            id_factory: Some(|idx, _| TestId(idx)),
-            gpu_buffer: None,
-            gpu_capacity: 0,
-            buffer_resized: false,
-        };
+    fn test_gpu_vec_push_increments_len() {
+        let mut vec = make_gpu_vec(4);
 
-        instances.insert(1);
-        instances.insert(2);
-        instances.insert(3); // exceeds initial capacity of 2
+        assert_eq!(vec.len(), 0);
+        assert!(vec.is_empty());
 
-        assert_eq!(instances.buffer_data.len(), 4); // grew 2x
-        assert_eq!(instances.max_index, 3);
-        assert_eq!(instances.buffer_data[2], 3);
+        vec.push(10);
+        assert_eq!(vec.len(), 1);
+        assert!(!vec.is_empty());
+
+        vec.push(20);
+        assert_eq!(vec.len(), 2);
     }
 
     #[test]
-    fn test_pool_instances_slot_reuse_does_not_grow() {
-        let mut instances = PoolInstances {
-            buffer_data: vec![0i32; 2],
-            removed_ids: Vec::new(),
-            ids: Vec::new(),
-            max_index: 0,
-            id_factory: Some(|idx, _| TestId(idx)),
-            gpu_buffer: None,
-            gpu_capacity: 0,
-            buffer_resized: false,
-        };
+    fn test_gpu_vec_data_reflects_pushes() {
+        let mut vec = make_gpu_vec(4);
 
-        let id0 = instances.insert(1);
-        instances.insert(2);
-        instances.remove(id0);
-        instances.insert(99); // reuses slot 0, no grow needed
+        vec.push(1);
+        vec.push(2);
+        vec.push(3);
 
-        assert_eq!(instances.buffer_data.len(), 2); // no growth
-        assert_eq!(instances.buffer_data[0], 99);
+        assert_eq!(vec.data(), &[1, 2, 3]);
     }
 
     #[test]
-    fn test_buffer_resized_starts_false() {
-        let instances = BumpInstances::<TestId, i32>::new(4);
-        assert!(!instances.buffer_resized);
+    fn test_gpu_vec_update() {
+        let mut vec = make_gpu_vec(4);
+
+        vec.push(1);
+        vec.push(2);
+        vec.update(0, 99);
+
+        assert_eq!(vec.data()[0], 99);
+        assert_eq!(vec.data()[1], 2);
     }
 
     #[test]
-    fn test_take_buffer_resized_returns_false_without_gpu_recreate() {
-        let mut instances = BumpInstances::<TestId, i32>::new(4);
-        assert!(!instances.take_buffer_resized());
-        assert!(!instances.take_buffer_resized()); // idempotent
+    #[should_panic]
+    fn test_gpu_vec_update_out_of_bounds_panics() {
+        let mut vec = make_gpu_vec(4);
+        vec.push(1);
+        vec.update(1, 99);
+    }
+
+    #[test]
+    fn test_gpu_vec_clear() {
+        let mut vec = make_gpu_vec(4);
+
+        vec.push(1);
+        vec.push(2);
+        vec.clear();
+
+        assert_eq!(vec.len(), 0);
+        assert!(vec.is_empty());
+    }
+
+    #[test]
+    fn test_gpu_vec_grow() {
+        let mut vec = make_gpu_vec(2);
+
+        vec.push(1);
+        vec.push(2);
+        vec.push(3); // triggers resize
+
+        assert_eq!(vec.len(), 3);
+        assert_eq!(vec.data(), &[1, 2, 3]);
     }
 }

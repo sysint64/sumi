@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 use std::ops::Range;
 
 use crate::graphics_context::GraphicsContext;
-use crate::memory_new::{GpuPoolBuffer, GpuVec, SlotId};
+use crate::memory::{GpuPoolBuffer, GpuVec, SlotId};
 
 pub trait RenderInstances<ID, T> {
     type Drain: Iterator<Item = Range<u32>>;
@@ -19,12 +19,7 @@ pub trait RenderInstances<ID, T> {
 
     fn data(&self) -> &[T];
 
-    #[inline]
-    fn bind(&mut self, slot: u32, context: &GraphicsContext) {
-        context
-            .render_pass()
-            .set_vertex_buffer(slot, self.gpu_buffer().slice(..));
-    }
+    fn bind(&mut self, slot: u32, context: &GraphicsContext);
 }
 
 pub struct BumpRangesIter {
@@ -209,6 +204,15 @@ where
     fn data(&self) -> &[T] {
         self.buffer.data()
     }
+
+    #[inline]
+    fn bind(&mut self, slot: u32, context: &GraphicsContext) {
+        self.buffer.ensure_capacity(context);
+
+        context
+            .render_pass()
+            .set_vertex_buffer(slot, self.gpu_buffer().slice(..));
+    }
 }
 
 pub struct PoolInstances<ID, T>
@@ -307,6 +311,15 @@ where
 
     fn data(&self) -> &[T] {
         self.buffer.data()
+    }
+
+    #[inline]
+    fn bind(&mut self, slot: u32, context: &GraphicsContext) {
+        self.buffer.ensure_capacity(context);
+
+        context
+            .render_pass()
+            .set_vertex_buffer(slot, self.gpu_buffer().slice(..));
     }
 }
 

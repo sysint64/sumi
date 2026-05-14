@@ -118,7 +118,6 @@ const PARTICLES_COUNT: usize = 100;
 
 #[derive(Default)]
 struct RenderDemoState {
-    tick: u64,
     quad_model_matrix: Mat4,
     rotation: f32,
     grid_mvp_matrix: Mat4,
@@ -175,7 +174,13 @@ struct Renderers {
     colored_plane_instances:
         sumi::instances::BumpInstances<sumi::ColoredPlaneInstanceId, sumi::ColoredPlaneInstance>,
     filled_circle: sumi::FilledCircleRenderer,
+    filled_circle_instances:
+        sumi::instances::BumpInstances<sumi::FilledCircleInstanceId, sumi::FilledCircleInstance>,
     outlined_circle: sumi::OutlinedCircleRenderer,
+    outlined_circle_instances: sumi::instances::BumpInstances<
+        sumi::OutlinedCircleInstanceId,
+        sumi::OutlinedCircleInstance,
+    >,
     colored_svg: sumi::ColoredSvgRenderer,
     svg: sumi::SvgRenderer,
     svg_instances: sumi::instances::BumpInstances<sumi::SvgMeshInstanceId, sumi::SvgMeshInstance>,
@@ -186,6 +191,8 @@ struct Renderers {
     polyline: sumi::PolylineRenderer,
     text: sumi::TextRenderer,
     rounded_rect: sumi::RoundedRectRenderer,
+    rounded_rect_instances:
+        sumi::instances::BumpInstances<sumi::RoundedRectInstanceId, sumi::RoundedRectInstance>,
 }
 
 impl RenderDemoRenderer<'_> {
@@ -260,16 +267,16 @@ impl RenderDemoRenderer<'_> {
             colored_plane_instances: sumi::instances::BumpInstances::new(10),
             svg_instances: sumi::instances::BumpInstances::new(10),
             colored_svg_instances: sumi::instances::BumpInstances::new(10),
-            filled_circle: sumi::FilledCircleRenderer::new(context, sumi::BumpInstances::new(10)),
-            outlined_circle: sumi::OutlinedCircleRenderer::new(
-                context,
-                sumi::BumpInstances::new(10),
-            ),
+            filled_circle: sumi::FilledCircleRenderer::new(context),
+            filled_circle_instances: sumi::instances::BumpInstances::new(PARTICLES_COUNT),
+            outlined_circle: sumi::OutlinedCircleRenderer::new(context),
+            outlined_circle_instances: sumi::instances::BumpInstances::new(4),
             colored_svg: sumi::ColoredSvgRenderer::new(context, &resources.mesh_2d),
             svg: sumi::renderer::svg::SvgRenderer::new(context, &resources.mesh_2d_new),
             polyline: sumi::PolylineRenderer::new(context),
             text: sumi::TextRenderer::new(context),
-            rounded_rect: sumi::RoundedRectRenderer::new(context, sumi::BumpInstances::new(10)),
+            rounded_rect: sumi::RoundedRectRenderer::new(context),
+            rounded_rect_instances: sumi::instances::BumpInstances::new(4),
         };
 
         state.goose_position = Vec2::new(0., 128.);
@@ -518,38 +525,42 @@ fn render_demo(
     render_sin_wave_2(context, view, resources, renderers, state);
 
     // Particles
-    let instances = renderers.filled_circle.instances();
-    instances.clear();
+    renderers.filled_circle_instances.clear();
 
     for particle in state.particles.iter() {
-        instances.insert(sumi::FilledCircleInstance::new(
-            &particle.mvp_matrix,
-            &particle.color,
-        ));
+        renderers
+            .filled_circle_instances
+            .insert(sumi::FilledCircleInstance::new(
+                &particle.mvp_matrix,
+                &particle.color,
+            ));
     }
 
-    instances.load_all_instances_to_gpu(context, sumi::LoadToGPUSchedule::NextFrame);
-
-    renderers
-        .filled_circle
-        .render_all_instances(context, &resources.centered_plane);
+    renderers.filled_circle_instances.upload_all(context);
+    renderers.filled_circle.render_all_instances(
+        context,
+        &resources.centered_plane,
+        &mut renderers.filled_circle_instances,
+    );
 
     // Outlined Circle
-    let instances = renderers.outlined_circle.instances();
-    instances.clear();
-
-    instances.insert(sumi::OutlinedCircleInstance::new(
-        5. * view.scale_factor_f32,
-        state.outlined_circle_radius,
-        &state.outlined_circle_mvp_matrix,
-        &Vec4::new(0.1, 0.8, 0.1, 1.0),
-    ));
-
-    instances.load_all_instances_to_gpu(context, sumi::LoadToGPUSchedule::NextFrame);
+    renderers.outlined_circle_instances.clear();
 
     renderers
-        .outlined_circle
-        .render_all_instances(context, &resources.centered_plane);
+        .outlined_circle_instances
+        .insert(sumi::OutlinedCircleInstance::new(
+            5. * view.scale_factor_f32,
+            state.outlined_circle_radius,
+            &state.outlined_circle_mvp_matrix,
+            &Vec4::new(0.1, 0.8, 0.1, 1.0),
+        ));
+
+    renderers.outlined_circle_instances.upload_all(context);
+    renderers.outlined_circle.render_all_instances(
+        context,
+        &resources.centered_plane,
+        &mut renderers.outlined_circle_instances,
+    );
 
     // Svg
     let svg_renderer = &mut renderers.svg;
@@ -585,25 +596,28 @@ fn render_demo(
 
     // Rounded rect
     let rr_size = Vec2::new(320. * view.scale_factor_f32, 100. * view.scale_factor_f32);
-    let instances = renderers.rounded_rect.instances();
-    instances.clear();
-    instances.insert(sumi::RoundedRectInstance::new(
-        &state.rounded_rect_mvp_matrix,
-        rr_size,
-        16. * view.scale_factor_f32,
-        Vec4::new(0.15, 0.15, 0.2, 0.95),
-        Vec4::new(0.4, 0.7, 1.0, 1.0),
-        sumi::BorderWidths {
-            top: 2. * view.scale_factor_f32,
-            right: 8. * view.scale_factor_f32,
-            bottom: 2. * view.scale_factor_f32,
-            left: 2. * view.scale_factor_f32,
-        },
-    ));
-    instances.load_all_instances_to_gpu(context, sumi::LoadToGPUSchedule::NextFrame);
+    renderers.rounded_rect_instances.clear();
     renderers
-        .rounded_rect
-        .render_all_instances(context, &resources.centered_plane);
+        .rounded_rect_instances
+        .insert(sumi::RoundedRectInstance::new(
+            &state.rounded_rect_mvp_matrix,
+            rr_size,
+            16. * view.scale_factor_f32,
+            Vec4::new(0.15, 0.15, 0.2, 0.95),
+            Vec4::new(0.4, 0.7, 1.0, 1.0),
+            sumi::BorderWidths {
+                top: 2. * view.scale_factor_f32,
+                right: 8. * view.scale_factor_f32,
+                bottom: 2. * view.scale_factor_f32,
+                left: 2. * view.scale_factor_f32,
+            },
+        ));
+    renderers.rounded_rect_instances.upload_all(context);
+    renderers.rounded_rect.render_all_instances(
+        context,
+        &resources.centered_plane,
+        &mut renderers.rounded_rect_instances,
+    );
 
     // Text
     let instances = renderers.text.instances();

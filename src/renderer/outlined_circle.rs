@@ -1,24 +1,23 @@
 use glam::{Mat4, Vec4};
 
 use crate::graphics_context::GraphicsContext;
-use crate::memory::{BumpInstances, InstanceId, Instances};
+use crate::instances::RenderInstances;
+use crate::memory::SlotId;
 use crate::resources::instancing_geometry::InstancingGeometry;
 use crate::resources::vertex::TexturedVertex;
 
-#[derive(Default, Debug, Copy, Clone)]
+#[derive(Default, Debug, Copy, Clone, PartialEq)]
 pub struct OutlinedCircleInstanceId {
     value: u32,
 }
 
-impl InstanceId for OutlinedCircleInstanceId {
+impl SlotId for OutlinedCircleInstanceId {
+    fn from_index(index: usize) -> Self {
+        OutlinedCircleInstanceId { value: index as u32 }
+    }
+
     fn index(&self) -> usize {
         self.value as usize
-    }
-}
-
-impl PartialEq for OutlinedCircleInstanceId {
-    fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
     }
 }
 
@@ -88,26 +87,12 @@ impl OutlinedCircleInstance {
     }
 }
 
-pub struct OutlinedCircleRenderer<
-    I: Instances<OutlinedCircleInstanceId, OutlinedCircleInstance> = BumpInstances<
-        OutlinedCircleInstanceId,
-        OutlinedCircleInstance,
-    >,
-> {
+pub struct OutlinedCircleRenderer {
     render_pipeline: wgpu::RenderPipeline,
-    instances: I,
 }
 
-impl<I: Instances<OutlinedCircleInstanceId, OutlinedCircleInstance>> OutlinedCircleRenderer<I> {
-    pub fn new(context: &GraphicsContext<'_, '_>, mut instances: I) -> Self {
-        instances.create_buffer(
-            context,
-            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            |index, _| OutlinedCircleInstanceId {
-                value: index as u32,
-            },
-        );
-
+impl OutlinedCircleRenderer {
+    pub fn new(context: &GraphicsContext<'_, '_>) -> Self {
         let shader = context
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -174,45 +159,40 @@ impl<I: Instances<OutlinedCircleInstanceId, OutlinedCircleInstance>> OutlinedCir
                     multiview_mask: None,
                 });
 
-        Self {
-            instances,
-            render_pipeline,
-        }
+        Self { render_pipeline }
     }
 
-    pub fn instances(&mut self) -> &mut I {
-        &mut self.instances
-    }
-
-    pub fn render_all_instances<T>(&mut self, context: &mut GraphicsContext<'_, '_>, geometry: &T)
-    where
+    pub fn render_all_instances<I, T>(
+        &self,
+        context: &mut GraphicsContext<'_, '_>,
+        geometry: &T,
+        instances: &mut I,
+    ) where
+        I: RenderInstances<OutlinedCircleInstanceId, OutlinedCircleInstance>,
         T: InstancingGeometry,
     {
-        for range in self.instances.ranges_iter() {
-            context.render_pass().set_pipeline(&self.render_pipeline);
-            context
-                .render_pass()
-                .set_vertex_buffer(1, self.instances.gpu_buffer().slice(..));
+        context.render_pass().set_pipeline(&self.render_pipeline);
+        instances.bind(1, context);
 
+        for range in instances.ranges(context) {
             geometry.render_instances(context, range);
         }
     }
 
-    pub fn render_instance<T>(
-        &mut self,
+    pub fn render_instance<I, T>(
+        &self,
         context: &mut GraphicsContext<'_, '_>,
         geometry: &T,
         id: OutlinedCircleInstanceId,
+        instances: &I,
     ) where
+        I: RenderInstances<OutlinedCircleInstanceId, OutlinedCircleInstance>,
         T: InstancingGeometry,
     {
-        debug_assert!(self.instances.contains(id), "Invalid ID");
-
         context.render_pass().set_pipeline(&self.render_pipeline);
         context
             .render_pass()
-            .set_vertex_buffer(1, self.instances.gpu_buffer().slice(..));
-
-        geometry.render_instances(context, id.value..id.value + 1);
+            .set_vertex_buffer(1, instances.gpu_buffer().slice(..));
+        geometry.render_instances(context, id.range());
     }
 }

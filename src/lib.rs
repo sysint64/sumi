@@ -3,17 +3,16 @@ pub mod instances;
 pub mod lazy_graphics_resource;
 pub mod math;
 pub mod memory;
-pub mod memory_new;
 pub mod renderer;
 pub mod resources;
 pub mod svg;
 pub mod view;
 
 pub use graphics_context::*;
+pub use instances::*;
 pub use lazy_graphics_resource::*;
 pub use math::*;
 pub use memory::*;
-pub use memory_new::*;
 pub use view::*;
 
 pub use cosmic_text_kv::FontId;
@@ -38,5 +37,5 @@ pub use renderer::text::*;
 
 pub mod prelude {
     pub use crate::instances::{BumpInstances, PoolInstances, RenderInstances};
-    pub use crate::memory::Instances;
+    pub use crate::resources::instancing_geometry::*;
 }
